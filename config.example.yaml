@@ -1,0 +1,52 @@
+# git-monitor configuration — copy to config.yaml and edit for your setup.
+#
+# Edit in the browser at /config, or by hand here. Changes take effect on the
+# next scan. Each target is scanned by piping scan.py to that host's Python over
+# SSH (or run locally for `ssh: local`). A host that is unreachable is flagged
+# offline and keeps its last snapshot.
+
+scan_interval_minutes: 30      # background rescan cadence
+since_days: 365                # heatmap window
+top_n: 12                      # projects shown in the "Recent projects" list
+
+# SSH defaults applied to every remote target (override per-target if needed).
+remote_python: python3         # interpreter name on the remote host
+connect_timeout: 8             # seconds before a host is treated as offline
+timeout: 120                   # seconds for the whole scan of one host
+ssh_identity: /data/id_ed25519
+ssh_options:
+  - UserKnownHostsFile=/data/known_hosts
+
+targets:
+  # The collector host itself — scanned locally, no SSH. Point roots at wherever
+  # your repos live; use `bare: true` for a directory of bare repos.
+  - name: homelab
+    ssh: local
+    roots:
+      - { path: /mnt/git, depth: 2, bare: true }
+      - { path: /home/user, depth: 2 }
+
+  # A Windows machine with native OpenSSH Server. Note remote_python: python
+  # (Windows has no `python3`), and Windows-style paths.
+  - name: desktop
+    ssh: user@192.168.1.20
+    remote_python: python
+    roots:
+      - { path: C:/projects, depth: 2 }
+    # extra:   [ "D:/oneoff/some-repo" ]     # explicit repos outside the roots
+    # exclude: [ "C:/projects/huge-vendored" ]
+
+  # A Linux machine.
+  - name: linux-pc
+    ssh: user@192.168.1.40
+    remote_python: python3
+    roots:
+      - { path: /home/user, depth: 2 }
+
+  # A host reached by a name that only resolves inside the container: map it to
+  # a fixed IP via `extra_hosts` in compose.yaml, then reference the name here.
+  - name: pi
+    ssh: root@myhost.lan
+    remote_python: python3
+    roots:
+      - { path: /, depth: 1 }

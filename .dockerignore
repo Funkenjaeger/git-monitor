@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+data.db*
+*.log
+.git
+.gitignore
+README.md
+compose.yaml
+id_ed25519*
+known_hosts

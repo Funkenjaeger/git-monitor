@@ -1,0 +1,27 @@
+# Compose stack for git-monitor — copy to compose.yaml and adjust paths/hosts.
+# Example assumes a Dockge-style layout: source in <apps>/git-monitor/src and
+# runtime data (config.yaml, data.db, ssh key) in <apps>/git-monitor/data.
+services:
+  git-monitor:
+    build: /opt/apps/git-monitor/src
+    image: git-monitor:latest
+    container_name: git-monitor
+    restart: unless-stopped
+    ports:
+      - 8083:8083
+    # Optional: map a hostname that only resolves inside the container to a
+    # fixed IP, so you can reference it by name in config.yaml.
+    # extra_hosts:
+    #   - "myhost.lan:192.168.1.30"
+    volumes:
+      # config.yaml, data.db, id_ed25519, known_hosts
+      - /opt/apps/git-monitor/data:/data
+      # local scan targets (read-only) — adjust to where your repos live
+      - /mnt/git:/mnt/git:ro
+      - /home/user:/home/user:ro
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    external: true

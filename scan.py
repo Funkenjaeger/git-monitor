@@ -117,7 +117,7 @@ def find_repos(root_path, depth, bare, exclude):
                 stack.append((e.path, level + 1))
 
 
-def collect_repo(path, bare, since_days):
+def collect_repo(path, bare, since_days, authors=None):
     """Gather cheap status for one repo. Returns a dict; never raises."""
     path = norm(path)
     name = os.path.basename(path)
@@ -175,15 +175,20 @@ def collect_repo(path, bare, since_days):
     if ok and out.strip():
         info["last_commit"] = out.strip()
 
-    # Commit-day histogram across all refs within the window.
-    ok, out = run_git(
-        [
-            "log", "--all", "--no-merges",
-            "--since=%d.days.ago" % int(since_days),
-            "--date=short", "--format=%cd",
-        ],
-        cwd, gd,
-    )
+    # Commit-day histogram across all refs within the window. When `authors` is
+    # given, count only commits whose author matches one of the patterns
+    # (case-insensitive regex over "Name <email>"), so the heatmap reflects your
+    # own activity, not upstream contributors on cloned/public repos.
+    log_args = [
+        "log", "--all", "--no-merges",
+        "--since=%d.days.ago" % int(since_days),
+        "--date=short", "--format=%cd",
+    ]
+    if authors:
+        log_args.append("--regexp-ignore-case")
+        for pat in authors:
+            log_args.append("--author=%s" % pat)
+    ok, out = run_git(log_args, cwd, gd)
     if ok:
         days = {}
         for ln in out.splitlines():
@@ -250,6 +255,7 @@ def load_config(argv):
 def main():
     cfg, pretty = load_config(sys.argv)
     since_days = int(cfg.get("since_days", 365))
+    authors = cfg.get("authors") or []
     exclude = [norm(p) for p in cfg.get("exclude", [])]
 
     result = {
@@ -273,7 +279,7 @@ def main():
                 if np in seen:
                     continue
                 seen.add(np)
-                result["repos"].append(collect_repo(repo_path, is_bare, since_days))
+                result["repos"].append(collect_repo(repo_path, is_bare, since_days, authors))
         except Exception as exc:  # never let one root sink the whole scan
             result["errors"].append("root %s: %s" % (path, exc))
 
@@ -285,7 +291,7 @@ def main():
             continue
         seen.add(np)
         bare = is_bare_repo(path) and not is_worktree_repo(path)
-        result["repos"].append(collect_repo(path, bare, since_days))
+        result["repos"].append(collect_repo(path, bare, since_days, authors))
 
     text = json.dumps(result, indent=2 if pretty else None, sort_keys=pretty)
     sys.stdout.write(text + "\n")

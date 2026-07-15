@@ -9,6 +9,13 @@ scan_interval_minutes: 30      # background rescan cadence
 since_days: 365                # heatmap window
 top_n: 12                      # projects shown in the "Recent projects" list
 
+# Count only YOUR commits in the heatmap (case-insensitive patterns matched
+# against "Name <email>"). Omit to count all authors. List every name/email
+# you commit under — check with: git log --all --format='%an <%ae>' | sort -u
+authors:
+  - your-name
+  - you@example.com
+
 # SSH defaults applied to every remote target (override per-target if needed).
 remote_python: python3         # interpreter name on the remote host
 connect_timeout: 8             # seconds before a host is treated as offline

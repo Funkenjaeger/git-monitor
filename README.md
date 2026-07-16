@@ -4,6 +4,8 @@ A small self-hosted dashboard that shows, across all your machines, which git
 projects have **uncommitted changes** or **local commits not yet pushed** — plus
 a GitHub-style commit **heatmap** and a **recent-projects** list.
 
+![git-monitor dashboard](docs/dashboard.png)
+
 It runs one container and pulls status from each machine over SSH (nothing to
 install on the machines themselves). Hosts that are offline are flagged and keep
 their last-known state.

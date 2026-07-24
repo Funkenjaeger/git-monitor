@@ -64,6 +64,19 @@ def _is_hosting(url):
     return any(h in (url or "").lower() for h in HOSTS)
 
 
+def _repo_name_from_url(u):
+    """Repo name from a remote URL, preserving its original casing.
+    _norm_url lowercases so keys match across spellings -- display names must
+    not go through it, or SketchToCut renders as sketchtocut."""
+    u = (u or "").strip().replace("\\", "/").rstrip("/")
+    if not u:
+        return ""
+    seg = u.split("/")[-1]
+    if ":" in seg:                       # scp-like host:repo with no path part
+        seg = seg.split(":")[-1]
+    return seg[:-4] if seg.endswith(".git") else seg
+
+
 def _tail2(p):
     """Last two path components, lowercased, .git stripped -- a mount-agnostic
     id for a local bare repo. dserver:/mnt/git/digestif.git, z:\\git\\digestif.git
@@ -290,7 +303,7 @@ def _build_one(members, lineages):
     for m in members:
         o = _origin_hosting(m)
         if o:
-            name = _norm_url(o).split("/")[-1]
+            name = _repo_name_from_url(o)
             break
     if not name:
         name = next((m.get("name") for m in members if working(m)),

@@ -201,13 +201,16 @@ def render_repos(repos, top_n=10):
             badges.append('<span class="badge noremote">no remote</span>')
         if not badges:
             badges.append('<span class="badge clean">clean</span>')
+        # Hovering the name reveals the absolute path — the quickest way to tell
+        # apart same-named repos, or find a checkout in an odd location.
         rows.append(
-            '<tr><td class="rname">%s</td>'
+            '<tr><td class="rname" title="%s">%s</td>'
             '<td class="rmachine">%s</td>'
             '<td class="rbranch">%s</td>'
             '<td class="rbadges">%s</td>'
             '<td class="rtime">%s</td></tr>'
-            % (esc(r["name"]), esc(r["machine"]), esc(r["branch"] or "—"),
+            % (esc("%s:%s" % (r["machine"], r["path"])),
+               esc(r["name"]), esc(r["machine"]), esc(r["branch"] or "—"),
                "".join(badges), rel_time(r["last_commit"])))
     total = len(repos)
     more = '<div class="more" id="repos-more" style="display:none"></div>'
@@ -302,7 +305,8 @@ table.repos th{text-align:left;color:var(--muted);font-size:11px;font-weight:600
  text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--border);}
 table.repos td{padding:9px 10px;border-bottom:1px solid #21262d;vertical-align:middle;word-break:break-word;}
 table.repos tr:last-child td{border-bottom:0;}
-.rname{font-weight:600;} .rmachine{color:var(--muted);} .rbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
+.rname{font-weight:600;cursor:help;}
+.rname:hover{text-decoration:underline dotted var(--muted);text-underline-offset:3px;} .rmachine{color:var(--muted);} .rbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
 .rtime{color:var(--muted);white-space:nowrap;}
 .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-right:5px;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}

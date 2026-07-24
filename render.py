@@ -141,8 +141,9 @@ def _machine_totals(repos):
     return agg
 
 
-def render_machines(machines, repos, root_warnings=None):
+def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     root_warnings = root_warnings or {}
+    repo_errors = repo_errors or {}
     totals = _machine_totals(repos)
     cards = []
     for m in machines:
@@ -164,6 +165,13 @@ def render_machines(machines, repos, root_warnings=None):
                     '&#9888; root %s: %s</div>'
                     % (esc(w["path"]), esc(w["reason"]),
                        esc(w["path"]), esc(w["reason"])))
+        # Repos found but unreadable (e.g. git's "dubious ownership") report as
+        # all-null rows, which looks like a quiet repo rather than a failure.
+        bad = repo_errors.get(m["name"], [])
+        if bad:
+            detail = "; ".join("%s: %s" % (b["path"], b["error"]) for b in bad[:8])
+            err += ('<div class="mwarn" title="%s">&#9888; %d repo%s unreadable</div>'
+                    % (esc(detail), len(bad), "" if len(bad) == 1 else "s"))
         cards.append(
             '<div class="mcard %s"><div class="mrow"><span class="dot %s"></span>'
             '<span class="mname">%s</span><span class="mstatus">%s</span></div>'
@@ -178,6 +186,9 @@ def render_repos(repos, top_n=10):
     rows = []
     for r in repos:
         badges = []
+        if r.get("error"):
+            badges.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
+                          % esc(r["error"]))
         if (r["dirty"] or 0) > 0:
             badges.append('<span class="badge dirty">%d dirty</span>' % r["dirty"])
         if (r["unpushed"] or 0) > 0:
@@ -207,7 +218,7 @@ def render_repos(repos, top_n=10):
 
 
 def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
-                root_warnings=None):
+                root_warnings=None, repo_errors=None):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -231,7 +242,7 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         "stats": stats,
         "year_total": str(year_total),
         "heatmap": heatmap_svg,
-        "machines": render_machines(machines, repos, root_warnings),
+        "machines": render_machines(machines, repos, root_warnings, repo_errors),
         "repos": render_repos(repos, top_n),
         "scan_at": scan_at,
     }.items():
@@ -299,6 +310,7 @@ table.repos tr:last-child td{border-bottom:0;}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}
 .badge.bare,.badge.noremote{background:#21262d;color:var(--muted);}
+.badge.err{background:rgba(248,81,73,.22);color:var(--alert);}
 .more{color:var(--accent);font-size:12px;margin-top:10px;cursor:pointer;display:inline-block;user-select:none;}
 .more:hover{text-decoration:underline;}
 </style></head><body>

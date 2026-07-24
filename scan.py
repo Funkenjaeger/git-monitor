@@ -63,7 +63,10 @@ def run_git(git_args, cwd=None, git_dir=None):
     except (OSError, subprocess.TimeoutExpired):
         return False, ""
     if proc.returncode != 0:
-        return False, proc.stdout.decode("utf-8", "replace")
+        # On failure prefer git's complaint over its (usually empty) stdout, so
+        # callers can report the real reason (e.g. "dubious ownership").
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        return False, err or proc.stdout.decode("utf-8", "replace")
     return True, proc.stdout.decode("utf-8", "replace")
 
 
@@ -145,6 +148,11 @@ def collect_repo(path, bare, since_days, authors=None):
     ok, out = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd, gd)
     if ok:
         info["branch"] = out.strip() or None
+    else:
+        # Keep git's reason; a repo that fails here yields all-null fields and
+        # would otherwise look like a quiet repo instead of a broken one.
+        first = (out or "").strip().splitlines()
+        info["error"] = first[0][:200] if first else None
 
     if not bare:
         ok, out = run_git(["status", "--porcelain"], cwd, gd)
@@ -197,7 +205,7 @@ def collect_repo(path, bare, since_days, authors=None):
                 days[ln] = days.get(ln, 0) + 1
         info["commit_days"] = days
 
-    if info["branch"] is None and info["last_commit"] is None:
+    if info["branch"] is None and info["last_commit"] is None and not info["error"]:
         info["error"] = "not a readable git repository"
     return info
 

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS repos (
     is_bare     INTEGER,
     last_commit TEXT,
     updated_at  TEXT,
+    error       TEXT,
     PRIMARY KEY (machine, path)
 );
 CREATE TABLE IF NOT EXISTS commit_days (
@@ -65,7 +66,16 @@ def connect(db_path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn):
+    """Add columns introduced after a DB was first created."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+    if "error" not in have:
+        with conn:
+            conn.execute("ALTER TABLE repos ADD COLUMN error TEXT")
 
 
 def save_scan(conn, machine, ssh, remote_python, result):
@@ -94,15 +104,15 @@ def save_scan(conn, machine, ssh, remote_python, result):
             conn.execute(
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
-                    has_remote, is_bare, last_commit, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    has_remote, is_bare, last_commit, updated_at, error)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
                     r.get("unpushed"),
                     1 if r.get("has_remote") else 0,
                     1 if r.get("is_bare") else 0,
-                    r.get("last_commit"), ts,
+                    r.get("last_commit"), ts, r.get("error"),
                 ),
             )
             for day, count in (r.get("commit_days") or {}).items():
@@ -161,6 +171,19 @@ def get_root_warnings(conn):
         out.setdefault(r["machine"], []).append(
             {"path": r["path"],
              "reason": "missing" if not r["exists_"] else "no repos found"})
+    return out
+
+
+def get_repo_errors(conn):
+    """Repos the scanner reached but couldn't read, keyed by machine.
+    Catches e.g. git refusing a repo for 'dubious ownership', which otherwise
+    reports as a repo with every field null and no visible complaint."""
+    rows = conn.execute(
+        "SELECT machine, path, name, error FROM repos "
+        "WHERE error IS NOT NULL AND error != '' ORDER BY machine, path").fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["machine"], []).append(dict(r))
     return out
 
 

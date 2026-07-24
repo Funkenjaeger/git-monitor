@@ -111,6 +111,11 @@ GITMON_DB=data.db GITMON_CONFIG=config.yaml python app.py # http://localhost:808
 - **Root health:** each configured root is checked on every scan. If a root is
   missing or yields no repos (e.g. an unmounted NFS share), the machine card
   shows a warning instead of silently reporting fewer repos.
+- **Unreadable repos:** if `git` refuses a repo the scanner found, its message is
+  kept and shown (an `unreadable` badge on the row, a count on the machine card).
+  The common case is *"detected dubious ownership"* — you SSH in as a different
+  user than the one that owns the checkout, and every field comes back null. Fix
+  with `git config --global --add safe.directory <path>` on that host.
 - The heatmap aggregates commits across all repos/machines. A repo checked out
   on two machines can double-count shared history; acceptable for a personal view.
 - `unpushed` is the reliable "at-risk work" signal; `ahead`/`behind` need a

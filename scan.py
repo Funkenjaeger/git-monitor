@@ -152,6 +152,7 @@ def collect_repo(path, bare, since_days, authors=None):
         "head_sha": None,
         "root_key": None,
         "branch_tips": {},
+        "branch_dates": {},
         "lineage": {},
     }
 
@@ -205,17 +206,26 @@ def collect_repo(path, bare, since_days, authors=None):
         roots = sorted(x.strip() for x in out.splitlines() if x.strip())
         info["root_key"] = ",".join(roots[:4]) or None
 
+    # Branch tip + last-commit date per local branch. Names can't contain
+    # spaces, and iso-strict has no space, so a 3-field split is safe.
     ok, out = run_git(
         ["for-each-ref", "--sort=-committerdate",
-         "--format=%(refname:short) %(objectname)", "refs/heads"], cwd, gd)
+         "--format=%(refname:short) %(objectname) %(committerdate:iso-strict)",
+         "refs/heads"], cwd, gd)
     if ok:
         for ln in out.splitlines():
             parts = ln.split()
-            if len(parts) == 2:
+            if len(parts) >= 2:
                 info["branch_tips"][parts[0]] = parts[1]
+                if len(parts) >= 3:
+                    info["branch_dates"][parts[0]] = parts[2]
     # Ordered history per branch: position of another copy's tip in this list
-    # *is* the number of commits that copy is behind.
-    for b in list(info["branch_tips"])[:LINEAGE_BRANCHES]:
+    # *is* the number of commits that copy is behind. Cover the busiest branches
+    # plus, always, the checked-out one -- that's the branch you're comparing.
+    lineage_for = list(info["branch_tips"])[:LINEAGE_BRANCHES]
+    if info["branch"] in info["branch_tips"] and info["branch"] not in lineage_for:
+        lineage_for.append(info["branch"])
+    for b in lineage_for:
         ok, out = run_git(
             ["rev-list", "-n", str(LINEAGE_DEPTH), info["branch_tips"][b]], cwd, gd)
         if ok:

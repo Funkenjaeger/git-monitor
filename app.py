@@ -81,7 +81,7 @@ def index():
         commit_days = storage.get_commit_days(conn)
         root_warnings = storage.get_root_warnings(conn)
         repo_errors = storage.get_repo_errors(conn)
-        replica_groups = storage.get_replica_groups(conn)
+        project_tree = storage.get_projects(conn)
     finally:
         conn.close()
     try:
@@ -91,7 +91,7 @@ def index():
     return render_page(summary, machines, repos, commit_days,
                        top_n=top_n, last_scan=_last_scan,
                        root_warnings=root_warnings, repo_errors=repo_errors,
-                       replica_groups=replica_groups)
+                       projects=project_tree)
 
 
 @app.route("/api/summary")
@@ -114,7 +114,7 @@ def api_data():
             "commit_days": storage.get_commit_days(conn),
             "root_warnings": storage.get_root_warnings(conn),
             "repo_errors": storage.get_repo_errors(conn),
-            "replica_groups": storage.get_replica_groups(conn),
+            "projects": storage.get_projects(conn),
             "last_scan": _last_scan,
         })
     finally:

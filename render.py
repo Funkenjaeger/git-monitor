@@ -180,99 +180,138 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     return '<div class="machines">%s</div>' % "".join(cards)
 
 
-def render_repos(repos, top_n=10):
-    # Render every repo; a client script shows only as many as fit the viewport
-    # (5-10, no scrollbar), and the "+ N more" note expands to the full list.
+CHEV = '<span class="chev">&#9656;</span>'   # ▸ rotates to ▾ when open
+GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
+
+
+def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True):
+    """The dirty / unpushed / unreadable / bare chips for one instance."""
+    b = []
+    if error:
+        b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
+                 % esc(error))
+    if (dirty or 0) > 0:
+        b.append('<span class="badge dirty">%d dirty</span>' % dirty)
+    if (unpushed or 0) > 0:
+        b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
+    if is_bare:
+        b.append('<span class="badge bare">bare</span>')
+    if not b and clean_ok:
+        b.append('<span class="badge clean">clean</span>')
+    return "".join(b)
+
+
+def _sync_badge(state, count):
+    """The cross-copy relationship chip (leader / behind / diverged / …)."""
+    if state == "leader":
+        return '<span class="badge lead">newest</span>'
+    if state == "sync":
+        return '<span class="badge clean">in sync</span>'
+    if state == "behind":
+        return ('<span class="badge behind">%d behind</span>' % count
+                if count else '<span class="badge clean">in sync</span>')
+    if state == "ahead":
+        return '<span class="badge dirty">%d ahead</span>' % count
+    if state == "far":
+        return '<span class="badge behind">far behind</span>'
+    return '<span class="badge diverged">diverged</span>'
+
+
+def _instance_row(pid, bid, e, level):
+    """A single checkout/mirror, deepest level of the tree."""
+    loc = "%s:%s" % (e["machine"], e["path"])
+    left = ('%s<span class="tmachine">%s</span>'
+            '<span class="tpath" title="%s">%s</span>'
+            % (GAP, esc(e["machine"]), esc(loc), esc(e["path"])))
+    right = (_sync_badge(e["state"], e["count"])
+             + _status_badges(e["dirty"], e["unpushed"], e["error"],
+                              e["is_bare"], clean_ok=False)
+             + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
+    return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
+            '<span class="tleft">%s</span><span class="tright">%s</span></div>'
+            % (level, pid, bid, left, right))
+
+
+def _branch_row(pid, bid, br, level):
+    """A branch within a project. A leaf when only one copy has it, otherwise
+    it opens to per-instance rows."""
+    single = br["copies"] <= 1
+    state = "ok" if br["in_sync"] else "warn"
+    if single:
+        e = br["entries"][0]
+        toggle = GAP
+        summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"])
+                + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
+        machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
+        attrs = 'data-leaf="1"'
+    else:
+        toggle = CHEV
+        label = ("all %d in sync" % br["copies"] if br["in_sync"]
+                 else "%d of %d out of date" % (br["stale"], br["copies"]))
+        summ = '<span class="gstate %s">%s</span>' % (state, label)
+        machine = ""
+        attrs = ""
+    left = ('%s<span class="tbranch">%s</span>%s'
+            % (toggle, esc(br["name"]), machine))
+    return ('<div class="trow brow lvl%d" data-pid="%s" data-bid="%s" %s style="display:none">'
+            '<span class="tleft">%s</span><span class="tright">%s</span></div>'
+            % (level, pid, bid, attrs, left, summ))
+
+
+def render_projects(projects):
+    """Project → Branch → Instance tree.
+
+    Each project is one row surfacing its most-recently-touched copy. When more
+    than one copy exists it expands: straight to instances if they're all on one
+    branch, otherwise to branches (newest pre-opened) that in turn open to
+    instances. Everything past the top row is hidden until asked for, so the
+    default view stays above the fold.
+    """
     rows = []
-    for r in repos:
-        badges = []
-        if r.get("error"):
-            badges.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
-                          % esc(r["error"]))
-        if (r["dirty"] or 0) > 0:
-            badges.append('<span class="badge dirty">%d dirty</span>' % r["dirty"])
-        if (r["unpushed"] or 0) > 0:
-            badges.append('<span class="badge unpushed">%d unpushed</span>' % r["unpushed"])
-        if (r["behind"] or 0) > 0:
-            badges.append('<span class="badge behind">%d behind</span>' % r["behind"])
-        if r["is_bare"]:
-            badges.append('<span class="badge bare">bare</span>')
-        if not r["has_remote"] and not r["is_bare"]:
-            badges.append('<span class="badge noremote">no remote</span>')
-        if not badges:
-            badges.append('<span class="badge clean">clean</span>')
-        # Hovering the name reveals the absolute path — the quickest way to tell
-        # apart same-named repos, or find a checkout in an odd location.
+    for pid, p in enumerate(projects):
+        s = p["surfaced"]
+        expandable = p["multi_instance"]
+        toggle = CHEV if expandable else GAP
+        loc = "%s:%s" % (s["machine"], s["path"])
+        meta = ""
+        if p["instances"] > 1:
+            cls = "copies warn" if p["out_of_sync"] else "copies"
+            meta = '<span class="%s">%d copies</span>' % (cls, p["instances"])
+        left = ('%s<span class="pname" title="%s">%s</span>'
+                '<span class="pbranch">%s</span>'
+                % (toggle, esc(loc), esc(p["name"]), esc(s["branch"] or "—")))
+        right = (meta
+                 + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"])
+                 + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
+        single = "1" if p["single_branch"] else ""
         rows.append(
-            '<tr><td class="rname" title="%s">%s</td>'
-            '<td class="rmachine">%s</td>'
-            '<td class="rbranch">%s</td>'
-            '<td class="rbadges">%s</td>'
-            '<td class="rtime">%s</td></tr>'
-            % (esc("%s:%s" % (r["machine"], r["path"])),
-               esc(r["name"]), esc(r["machine"]), esc(r["branch"] or "—"),
-               "".join(badges), rel_time(r["last_commit"])))
-    total = len(repos)
+            '<div class="trow prow lvl0" data-pid="%d" data-single="%s"%s>'
+            '<span class="tleft">%s</span><span class="tright">%s</span></div>'
+            % (pid, single, ' data-exp="1"' if expandable else "", left, right))
+
+        if not expandable:
+            continue
+        if p["single_branch"]:
+            # No branch layer: the project row opens straight to its instances.
+            br = p["branches"][0] if p["branches"] else {"name": s["branch"], "entries": []}
+            bid = "p%db0" % pid
+            for e in br.get("entries", []):
+                rows.append(_instance_row(pid, bid, e, 1))
+        else:
+            for j, br in enumerate(p["branches"]):
+                bid = "p%db%d" % (pid, j)
+                rows.append(_branch_row(pid, bid, br, 1))
+                if br["copies"] > 1:
+                    for e in br["entries"]:
+                        rows.append(_instance_row(pid, bid, e, 2))
+
     more = '<div class="more" id="repos-more" style="display:none"></div>'
-    return (
-        '<table class="repos" data-total="%d"><thead><tr><th>Project</th><th>Machine</th>'
-        '<th>Branch</th><th>Status</th><th>Last commit</th></tr></thead>'
-        '<tbody>%s</tbody></table>%s' % (total, "".join(rows), more))
-
-
-def render_replicas(groups):
-    """Projects that exist in more than one place, and how far apart they are."""
-    if not groups:
-        return ""
-    out = []
-    for g in groups:
-        rows = []
-        for e in g["entries"]:
-            st, n = e["state"], e["count"]
-            if st == "leader":
-                badge = '<span class="badge clean">newest</span>'
-            elif st == "sync":
-                badge = '<span class="badge clean">in sync</span>'
-            elif st == "behind":
-                badge = ('<span class="badge unpushed">%d behind</span>'
-                         % n if n else '<span class="badge clean">in sync</span>')
-            elif st == "ahead":
-                badge = '<span class="badge dirty">%d ahead</span>' % n
-            elif st == "far":
-                badge = '<span class="badge unpushed">far behind</span>'
-            elif st == "nobranch":
-                badge = ('<span class="badge noremote">no %s</span>'
-                         % esc(e["branch"]))
-            else:
-                badge = '<span class="badge behind">diverged</span>'
-            extra = ""
-            if (e["dirty"] or 0) > 0:
-                extra = '<span class="badge dirty">%d dirty</span>' % e["dirty"]
-            if e["is_bare"]:
-                extra += '<span class="badge bare">bare</span>'
-            rows.append(
-                '<tr><td class="rmachine">%s</td>'
-                '<td class="rpath" title="%s">%s</td>'
-                '<td class="rbadges">%s%s</td></tr>'
-                % (esc(e["machine"]), esc(e["path"]), esc(e["path"]),
-                   badge, extra))
-        head = ('<span class="gname">%s</span>'
-                '<span class="gbranch">%s</span>'
-                '<span class="gstate %s">%s</span>'
-                % (esc(g["name"]), esc(g["branch"]),
-                   "ok" if g["in_sync"] else "warn",
-                   "all %d copies in sync" % g["copies"] if g["in_sync"]
-                   else "%d of %d out of date" % (g["stale"], g["copies"])))
-        out.append('<div class="rgroup"><div class="ghead">%s</div>'
-                   '<table class="repos rtable"><tbody>%s</tbody></table></div>'
-                   % (head, "".join(rows)))
-    return ('<div class="card"><div class="cardhead"><h2>Copies of the same project</h2>'
-            '<span class="hint">compared directly between machines &mdash; no fetch needed</span>'
-            '</div>%s</div>' % "".join(out))
+    return ('<div class="tree" data-total="%d">%s</div>%s'
+            % (len(projects), "".join(rows), more))
 
 
 def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
-                root_warnings=None, repo_errors=None, replica_groups=None):
+                root_warnings=None, repo_errors=None, projects=None):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -297,8 +336,7 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         "year_total": str(year_total),
         "heatmap": heatmap_svg,
         "machines": render_machines(machines, repos, root_warnings, repo_errors),
-        "repos": render_repos(repos, top_n),
-        "replicas": render_replicas(replica_groups or []),
+        "repos": render_projects(projects or []),
         "scan_at": scan_at,
     }.items():
         out = out.replace("{{%s}}" % key, val)
@@ -352,32 +390,42 @@ button:disabled{opacity:.6;cursor:default;}
 .msub{color:var(--fg);font-size:12px;margin-top:6px;} .mseen{color:var(--muted);font-size:11px;margin-top:2px;}
 .merr{color:var(--warn);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .mwarn{color:var(--alert);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-table.repos{width:100%;border-collapse:collapse;}
-table.repos th{text-align:left;color:var(--muted);font-size:11px;font-weight:600;
- text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--border);}
-table.repos td{padding:9px 10px;border-bottom:1px solid #21262d;vertical-align:middle;word-break:break-word;}
-table.repos tr:last-child td{border-bottom:0;}
-.rname{font-weight:600;cursor:help;}
-.rname:hover{text-decoration:underline dotted var(--muted);text-underline-offset:3px;} .rmachine{color:var(--muted);} .rbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
-.rtime{color:var(--muted);white-space:nowrap;}
-.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-right:5px;}
+/* Project → Branch → Instance tree */
+.tree{display:flex;flex-direction:column;}
+.trow{display:flex;align-items:center;justify-content:space-between;gap:12px;
+ padding:8px 6px;border-bottom:1px solid #21262d;min-height:38px;}
+.tree .trow:last-of-type{border-bottom:0;}
+.tleft{display:flex;align-items:center;gap:9px;min-width:0;flex:1;}
+.tright{display:flex;align-items:center;gap:0;flex:none;white-space:nowrap;}
+.lvl1 .tleft{padding-left:26px;} .lvl2 .tleft{padding-left:52px;}
+/* subtle guide lines for nested rows */
+.lvl1{background:linear-gradient(90deg,transparent 12px,#21262d 12px,#21262d 13px,transparent 13px);}
+.lvl2{background:linear-gradient(90deg,transparent 12px,#21262d 12px,#21262d 13px,transparent 13px,transparent 38px,#21262d 38px,#21262d 39px,transparent 39px);}
+.chev{display:inline-flex;width:14px;justify-content:center;color:var(--muted);
+ font-size:10px;transition:transform .12s ease;flex:none;}
+.chev.gap{visibility:hidden;}
+.prow[data-exp],.brow:not([data-leaf]){cursor:pointer;user-select:none;}
+.prow.open>.tleft>.chev,.brow.open>.tleft>.chev{transform:rotate(90deg);}
+.prow:hover,.brow:not([data-leaf]):hover{background:#1c2230;}
+.pname{font-weight:600;} .pname[title]{cursor:pointer;}
+.pbranch,.tbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
+.tbranch{color:var(--fg);}
+.tmachine{color:var(--fg);font-size:13px;} .lvl2 .tmachine,.brow .tmachine{color:var(--muted);}
+.tpath{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.ttime{color:var(--muted);white-space:nowrap;margin-left:8px;font-size:12px;}
+.copies{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:20px;
+ padding:1px 8px;margin-right:6px;} .copies.warn{color:var(--warn);border-color:var(--warn);}
+.gstate{font-size:12px;} .gstate.ok{color:var(--muted);} .gstate.warn{color:var(--warn);}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-left:5px;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.unpushed{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}
+.badge.lead{background:rgba(63,185,80,.18);color:var(--accent);}
+.badge.diverged{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.bare,.badge.noremote{background:#21262d;color:var(--muted);}
 .badge.err{background:rgba(248,81,73,.22);color:var(--alert);}
-.rgroup{border-top:1px solid var(--line);padding:10px 0;}
-.rgroup:first-child{border-top:none;}
-.ghead{display:flex;align-items:baseline;gap:10px;margin-bottom:2px;}
-.gname{font-weight:600;}
-.gbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
-.gstate{margin-left:auto;font-size:12px;}
-.gstate.ok{color:var(--accent);} .gstate.warn{color:var(--alert);}
-.rtable td{padding:3px 8px 3px 0;border:none;}
-.rpath{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;
-       max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.hint{color:var(--muted);font-size:12px;}
 .more{color:var(--accent);font-size:12px;margin-top:10px;cursor:pointer;display:inline-block;user-select:none;}
 .more:hover{text-decoration:underline;}
 </style></head><body>
@@ -406,11 +454,10 @@ table.repos tr:last-child td{border-bottom:0;}
 </div>
 
 <div class="card">
-  <div class="cardhead"><h2>Recent projects</h2></div>
+  <div class="cardhead"><h2>Recent projects</h2>
+  <span class="note">click a project to compare its copies across machines</span></div>
   {{repos}}
 </div>
-
-{{replicas}}
 </div>
 <script>
 function refresh(){
@@ -420,43 +467,92 @@ function refresh(){
    .catch(function(){b.disabled=false;b.textContent='Refresh';});
 }
 (function(){
-  var MIN=5, MAX=10;
-  var table=document.querySelector('table.repos');
-  if(!table) return;
-  var rows=Array.prototype.slice.call(table.querySelectorAll('tbody tr'));
+  var MIN=4, MAX=12;
+  var tree=document.querySelector('.tree');
+  if(!tree) return;
+  var prows=Array.prototype.slice.call(tree.querySelectorAll('.prow'));
   var moreEl=document.getElementById('repos-more');
   var doc=document.documentElement;
-  var expanded=false, fitN=rows.length;
-  function showN(n){ rows.forEach(function(r,i){r.style.display = i<n ? '' : 'none';}); }
-  // Largest row count (5-10) that doesn't make the page overflow.
-  // Compare against clientHeight (true inner height, excludes scrollbar gutter)
-  // so a few leftover pixels don't slip a scrollbar through.
+  var listExpanded=false, fitN=prows.length, treeOpen=0;
+  var Q=function(sel){ return Array.prototype.slice.call(tree.querySelectorAll(sel)); };
+  function shown(el,on){ el.style.display = on ? '' : 'none'; }
+
+  // --- tree expand / collapse -----------------------------------------------
+  function openBranch(brow){
+    if(brow.hasAttribute('data-leaf')) return;
+    brow.classList.add('open');
+    Q('.irow[data-bid="'+brow.getAttribute('data-bid')+'"]').forEach(function(r){shown(r,true);});
+  }
+  function closeBranch(brow){
+    brow.classList.remove('open');
+    Q('.irow[data-bid="'+brow.getAttribute('data-bid')+'"]').forEach(function(r){shown(r,false);});
+  }
+  function openProject(prow){
+    var pid=prow.getAttribute('data-pid');
+    prow.classList.add('open');
+    if(prow.getAttribute('data-single')==='1'){
+      Q('.irow[data-pid="'+pid+'"]').forEach(function(r){shown(r,true);});
+    } else {
+      var brows=Q('.brow[data-pid="'+pid+'"]');
+      brows.forEach(function(r){shown(r,true);});
+      // Drill straight into the most-recent branch (first in DOM order) and only
+      // that one; the rest stay listed but collapsed. If it's a leaf there's
+      // nothing deeper to open.
+      if(brows[0]) openBranch(brows[0]);
+    }
+  }
+  function closeProject(prow){
+    var pid=prow.getAttribute('data-pid');
+    prow.classList.remove('open');
+    Q('.brow[data-pid="'+pid+'"]').forEach(function(r){shown(r,false); r.classList.remove('open');});
+    Q('.irow[data-pid="'+pid+'"]').forEach(function(r){shown(r,false);});
+  }
+  prows.forEach(function(prow){
+    if(!prow.hasAttribute('data-exp')) return;
+    prow.addEventListener('click', function(){
+      if(prow.classList.contains('open')){ closeProject(prow); treeOpen--; }
+      else { openProject(prow); treeOpen++; }
+    });
+  });
+  Q('.brow').forEach(function(brow){
+    if(brow.hasAttribute('data-leaf')) return;
+    brow.addEventListener('click', function(){
+      if(brow.classList.contains('open')) closeBranch(brow); else openBranch(brow);
+    });
+  });
+
+  // --- fit the *project* rows to the viewport, no scrollbar by default ------
+  function showN(n){
+    prows.forEach(function(r,i){
+      var on=i<n; shown(r,on);
+      if(!on && r.classList.contains('open')){ closeProject(r); treeOpen--; }
+    });
+  }
   function computeFit(){
-    var n=Math.min(MAX, rows.length);
-    showN(n);
+    var n=Math.min(MAX, prows.length); showN(n);
     var guard=0;
-    while(n>MIN && doc.scrollHeight>doc.clientHeight && guard<50){ n--; showN(n); guard++; }
+    while(n>MIN && doc.scrollHeight>doc.clientHeight && guard<60){ n--; showN(n); guard++; }
     return n;
   }
   function render(){
-    if(!rows.length) return;
-    if(expanded){
-      showN(rows.length);
-      if(moreEl){ moreEl.textContent='show fewer'; moreEl.style.display=(rows.length>fitN)?'':'none'; }
+    if(!prows.length) return;
+    if(listExpanded){
+      showN(prows.length);
+      if(moreEl){ moreEl.textContent='show fewer'; moreEl.style.display=(prows.length>fitN)?'':'none'; }
     } else {
       fitN=computeFit();
+      var hidden=prows.length-fitN;
       if(moreEl){
-        var hidden=rows.length-fitN;
-        moreEl.textContent = hidden>0 ? ('+ '+hidden+' more repositories') : '';
+        moreEl.textContent = hidden>0 ? ('+ '+hidden+' more projects') : '';
         moreEl.style.display = hidden>0 ? '' : 'none';
       }
     }
   }
-  if(moreEl) moreEl.addEventListener('click', function(){ expanded=!expanded; render(); });
-  function reflow(){ if(!expanded) render(); }
+  if(moreEl) moreEl.addEventListener('click', function(){ listExpanded=!listExpanded; render(); });
+  // Expanding a tree node is a deliberate "show me more" — let the page scroll
+  // then, and don't re-truncate the project list underneath the user.
+  function reflow(){ if(!listExpanded && treeOpen===0) render(); }
   render();
-  // Re-measure after the layout fully settles — the first pass can run a few
-  // pixels short (before final paint), which is what leaves a scrollbar sliver.
   requestAnimationFrame(function(){ requestAnimationFrame(reflow); });
   window.addEventListener('load', reflow);
   window.addEventListener('resize', reflow);

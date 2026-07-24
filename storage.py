@@ -82,7 +82,7 @@ def _migrate(conn):
     """Add columns introduced after a DB was first created."""
     have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
     with conn:
-        for col in ("error", "head_sha", "root_key", "branch_tips"):
+        for col in ("error", "head_sha", "root_key", "branch_tips", "branch_dates"):
             if col not in have:
                 conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
 
@@ -115,8 +115,8 @@ def save_scan(conn, machine, ssh, remote_python, result):
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
                     has_remote, is_bare, last_commit, updated_at, error,
-                    head_sha, root_key, branch_tips)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    head_sha, root_key, branch_tips, branch_dates)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
@@ -126,6 +126,7 @@ def save_scan(conn, machine, ssh, remote_python, result):
                     r.get("last_commit"), ts, r.get("error"),
                     r.get("head_sha"), r.get("root_key"),
                     json.dumps(r.get("branch_tips") or {}),
+                    json.dumps(r.get("branch_dates") or {}),
                 ),
             )
             for branch, shas in (r.get("lineage") or {}).items():
@@ -178,10 +179,11 @@ def get_repos(conn):
     rows = []
     for r in conn.execute("SELECT * FROM repos ORDER BY last_commit DESC"):
         d = dict(r)
-        try:
-            d["branch_tips"] = json.loads(d.get("branch_tips") or "{}")
-        except (ValueError, TypeError):
-            d["branch_tips"] = {}
+        for col in ("branch_tips", "branch_dates"):
+            try:
+                d[col] = json.loads(d.get(col) or "{}")
+            except (ValueError, TypeError):
+                d[col] = {}
         rows.append(d)
     return rows
 
@@ -195,9 +197,9 @@ def get_lineages(conn):
     return out
 
 
-def get_replica_groups(conn):
-    import replicas
-    return replicas.build_groups(get_repos(conn), get_lineages(conn))
+def get_projects(conn):
+    import projects
+    return projects.build_projects(get_repos(conn), get_lineages(conn))
 
 
 def get_root_warnings(conn):

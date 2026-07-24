@@ -258,6 +258,32 @@ def _branch_row(pid, bid, br, level):
             % (level, pid, bid, attrs, left, summ))
 
 
+def _backup_chip(p):
+    """A neutral where-is-it-backed-up label — not a warning. Shows the hosting
+    service, a local-only mirror, or nothing configured."""
+    b = p.get("backup")
+    host = p.get("host_label") or "hosted"
+    if b == "host":
+        return ('<span class="backup" title="backed up on %s">%s</span>'
+                % (esc(host), esc(host)))
+    if b == "host+local":
+        tip = "on %s and a local mirror" % host
+        star = ""
+        if p.get("host_unpushed"):
+            tip += "; %d commit(s) committed locally but not pushed to %s" % (
+                p["host_unpushed"], host)
+            star = "&#8226;"
+        return ('<span class="backup" title="%s">%s+local%s</span>'
+                % (esc(tip), esc(host), star))
+    if b == "local":
+        return ('<span class="backup" title="backed up only on a local mirror '
+                '(no hosting remote)">local</span>')
+    if b == "none":
+        return ('<span class="backup none" title="no remote configured">'
+                'no remote</span>')
+    return ""
+
+
 def render_projects(projects):
     """Project → Branch → Instance tree.
 
@@ -273,10 +299,10 @@ def render_projects(projects):
         expandable = p["multi_instance"]
         toggle = CHEV if expandable else GAP
         loc = "%s:%s" % (s["machine"], s["path"])
-        meta = ""
+        meta = _backup_chip(p)
         if p["instances"] > 1:
             cls = "copies warn" if p["out_of_sync"] else "copies"
-            meta = '<span class="%s">%d copies</span>' % (cls, p["instances"])
+            meta += '<span class="%s">%d copies</span>' % (cls, p["instances"])
         left = ('%s<span class="pname" title="%s">%s</span>'
                 '<span class="pbranch">%s</span>'
                 % (toggle, esc(loc), esc(p["name"]), esc(s["branch"] or "—")))
@@ -416,6 +442,8 @@ button:disabled{opacity:.6;cursor:default;}
 .ttime{color:var(--muted);white-space:nowrap;margin-left:8px;font-size:12px;}
 .copies{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:20px;
  padding:1px 8px;margin-right:6px;} .copies.warn{color:var(--warn);border-color:var(--warn);}
+.backup{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:20px;
+ padding:1px 8px;margin-right:6px;cursor:help;} .backup.none{color:var(--warn);border-color:var(--warn);}
 .gstate{font-size:12px;} .gstate.ok{color:var(--muted);} .gstate.warn{color:var(--warn);}
 .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-left:5px;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}

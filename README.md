@@ -138,11 +138,21 @@ GITMON_DB=data.db GITMON_CONFIG=config.yaml python app.py # http://localhost:808
   history: the index *is* the number of commits behind. No fetching, no network,
   and it still works when a machine can't reach the remote at all.
 
-  Copies are matched on root-commit SHA **and** project name. Root SHA alone
-  over-groups: a project started by branching off another keeps the original
-  root commit forever, so `reflex-ui` and the `rotary-controller-python` it grew
-  out of look identical by that measure. (Origin-URL-based grouping — more robust
-  still — is a planned follow-up.)
+  Copies are matched by **union-find over several identity keys** — two
+  instances group if they share *any* of: a normalized `origin` URL (the same
+  hosted repo groups across differing directory names — cncpc's `~/linuxcnc`
+  *is* `fj-lcnc-cfg`), a local origin's path-tail (a checkout to the bare it
+  clones from), or a **root commit + name** (plain clones and their bare mirror).
+  Only `origin` contributes a hosting key, so an `upstream` fork remote doesn't
+  fuse every fork together; and the name guards a shared root, so a project that
+  merely branched off another (`esp32_air_dryer_controller` off the valve
+  controller, `reflex-ui` off `rotary-controller-python`) stays its own project.
+- **Backup marker.** Each project carries a neutral label — `GitHub`, `local`
+  (only a bare mirror / non-hosting remote), `GitHub+local`, or `no remote` —
+  so it's visible at a glance which projects are pushed to a hosting service
+  versus living only on the NAS. It's a marker, not a nag: local-only is a
+  legitimate choice. For a repo backed up both places, the tooltip notes any
+  commits committed locally but not yet pushed to the hosting remote.
 - The heatmap aggregates commits across all repos/machines. A repo checked out
   on two machines can double-count shared history; acceptable for a personal view.
 - `unpushed` is the reliable "at-risk work" signal; `ahead`/`behind` need a

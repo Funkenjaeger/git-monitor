@@ -154,6 +154,8 @@ def collect_repo(path, bare, since_days, authors=None):
         "branch_tips": {},
         "branch_dates": {},
         "lineage": {},
+        "remotes": {},
+        "unpushed_by_remote": {},
     }
 
     ok, out = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd, gd)
@@ -182,13 +184,26 @@ def collect_repo(path, bare, since_days, authors=None):
         # Works even when the current branch has no configured upstream, which
         # is the exact case (a never-pushed feature branch) we care about.
         ok, remotes = run_git(["remote"], cwd, gd)
-        info["has_remote"] = bool(ok and remotes.strip())
+        remote_names = remotes.split() if ok else []
+        info["has_remote"] = bool(remote_names)
         if info["has_remote"]:
             ok, out = run_git(
                 ["rev-list", "--count", "HEAD", "--not", "--remotes"], cwd, gd
             )
             if ok and out.strip().isdigit():
                 info["unpushed"] = int(out.strip())
+        # Remote URLs identify the project across machines (same origin =>
+        # same repo, whatever the checkout is named); per-remote unpushed lets
+        # us tell "on the NAS but not on GitHub" apart from the union count.
+        for rn in remote_names:
+            ok, url = run_git(["remote", "get-url", rn], cwd, gd)
+            if ok and url.strip():
+                info["remotes"][rn] = url.strip().splitlines()[0]
+            ok, out = run_git(
+                ["rev-list", "--count", "HEAD", "--not", "--remotes=" + rn], cwd, gd
+            )
+            if ok and out.strip().isdigit():
+                info["unpushed_by_remote"][rn] = int(out.strip())
 
     ok, out = run_git(["log", "-1", "--format=%cI"], cwd, gd)
     if ok and out.strip():
@@ -203,8 +218,11 @@ def collect_repo(path, bare, since_days, authors=None):
         info["head_sha"] = out.strip() or None
     ok, out = run_git(["rev-list", "--max-parents=0", "--all"], cwd, gd)
     if ok:
+        # All root commits, comma-joined. The collector keys on each one
+        # individually, so two clones match if they share *any* root even when
+        # their branch sets (and thus the full list) differ.
         roots = sorted(x.strip() for x in out.splitlines() if x.strip())
-        info["root_key"] = ",".join(roots[:4]) or None
+        info["root_key"] = ",".join(roots) or None
 
     # Branch tip + last-commit date per local branch. Names can't contain
     # spaces, and iso-strict has no space, so a 3-field split is safe.

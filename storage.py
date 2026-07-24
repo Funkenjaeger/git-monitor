@@ -82,7 +82,8 @@ def _migrate(conn):
     """Add columns introduced after a DB was first created."""
     have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
     with conn:
-        for col in ("error", "head_sha", "root_key", "branch_tips", "branch_dates"):
+        for col in ("error", "head_sha", "root_key", "branch_tips", "branch_dates",
+                    "remotes", "unpushed_by_remote"):
             if col not in have:
                 conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
 
@@ -115,8 +116,9 @@ def save_scan(conn, machine, ssh, remote_python, result):
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
                     has_remote, is_bare, last_commit, updated_at, error,
-                    head_sha, root_key, branch_tips, branch_dates)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    head_sha, root_key, branch_tips, branch_dates,
+                    remotes, unpushed_by_remote)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
@@ -127,6 +129,8 @@ def save_scan(conn, machine, ssh, remote_python, result):
                     r.get("head_sha"), r.get("root_key"),
                     json.dumps(r.get("branch_tips") or {}),
                     json.dumps(r.get("branch_dates") or {}),
+                    json.dumps(r.get("remotes") or {}),
+                    json.dumps(r.get("unpushed_by_remote") or {}),
                 ),
             )
             for branch, shas in (r.get("lineage") or {}).items():
@@ -179,7 +183,7 @@ def get_repos(conn):
     rows = []
     for r in conn.execute("SELECT * FROM repos ORDER BY last_commit DESC"):
         d = dict(r)
-        for col in ("branch_tips", "branch_dates"):
+        for col in ("branch_tips", "branch_dates", "remotes", "unpushed_by_remote"):
             try:
                 d[col] = json.loads(d.get(col) or "{}")
             except (ValueError, TypeError):

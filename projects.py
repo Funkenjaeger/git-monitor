@@ -33,6 +33,85 @@ def _norm_name(name):
     return n[:-4] if n.endswith(".git") else n
 
 
+HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+
+
+def _norm_url(u):
+    """Collapse the many spellings of one remote to a single key.
+
+    git@github.com:Org/Repo.git, https://github.com/Org/Repo.git and
+    https://github.com/Org/Repo all become github.com/org/repo, so the same
+    repo groups no matter how a given checkout addressed it."""
+    u = (u or "").strip()
+    if not u:
+        return ""
+    # scp-like  user@host:path  ->  host/path
+    if "://" not in u and "@" in u and ":" in u.split("@", 1)[1]:
+        u = u.split("@", 1)[1].replace(":", "/", 1)
+    else:
+        if "://" in u:
+            u = u.split("://", 1)[1]
+        head = u.split("/", 1)[0]
+        if "@" in head:
+            u = u.split("@", 1)[1]
+    u = u.replace("\\", "/").rstrip("/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    return u.lower()
+
+
+def _is_hosting(url):
+    return any(h in (url or "").lower() for h in HOSTS)
+
+
+def _tail2(p):
+    """Last two path components, lowercased, .git stripped -- a mount-agnostic
+    id for a local bare repo. dserver:/mnt/git/digestif.git, z:\\git\\digestif.git
+    and /mnt/git/digestif.git all reduce to git/digestif, so a checkout's local
+    remote lines up with the bare mirror it points at across machines."""
+    parts = [x for x in (p or "").replace("\\", "/").split("/") if x]
+    if parts and parts[-1].endswith(".git"):
+        parts[-1] = parts[-1][:-4]
+    return "/".join(parts[-2:]).lower()
+
+
+def _origin_hosting(r):
+    o = (r.get("remotes") or {}).get("origin")
+    return o if o and _is_hosting(o) else None
+
+
+def _keys_for(r):
+    """Identity keys linking copies of one project; sharing *any* key groups two
+    instances. The origin URL ties the same hosted repo together across differing
+    directory names; a local (non-hosting) remote's path-tail ties a checkout to
+    the bare mirror it pushes to; and root+name bridges plain clones. Only the
+    *origin* contributes a hosting key -- an `upstream` remote must not fuse every
+    fork of one project together."""
+    keys = set()
+    origin = (r.get("remotes") or {}).get("origin")
+    if origin:
+        # Only origin defines identity. A hosting origin ties the same repo
+        # together across dir names; a local origin's path-tail ties a checkout
+        # to the bare it clones from. Secondary remotes (a stale `NAS` copied in
+        # from another project, an `upstream` fork) are deliberately ignored.
+        keys.add(("url:" + _norm_url(origin)) if _is_hosting(origin)
+                 else ("local:" + _tail2(origin)))
+    if r.get("is_bare"):
+        keys.add("local:" + _tail2(r.get("path")))
+    if r.get("root_key"):
+        # One key per root commit (not the whole list): clones that differ only
+        # in which branches they carry still share their original root, so they
+        # group -- while the name guards against distinct projects that merely
+        # branched off a shared root (air_dryer cloned from the valve project).
+        nm = _norm_name(r.get("name"))
+        for root in r["root_key"].split(","):
+            if root:
+                keys.add("root:%s|%s" % (root, nm))
+    if not keys:
+        keys.add("solo:%s|%s" % (r.get("machine"), r.get("path")))
+    return keys
+
+
 def _neg(iso):
     # Newest-first sort key without parsing the timestamp.
     return tuple(-ord(c) for c in (iso or ""))
@@ -63,16 +142,37 @@ def build_projects(repos, lineages):
     `lineages` maps (machine, path) -> {branch: [sha, ...]}.
     Returns a list of project dicts, newest activity first.
     """
-    groups = {}
-    for r in repos:
-        key = r.get("root_key")
-        if not key:
-            # No shared root to group on -- keep it as its own project so it
-            # still appears, keyed uniquely so two such repos don't merge.
-            key = "solo:%s:%s" % (r.get("machine"), r.get("path"))
-        groups.setdefault((key, _norm_name(r.get("name"))), []).append(r)
+    # Union-find over the identity keys: any shared key merges two instances
+    # into one project. This groups the same GitHub repo across differing
+    # directory names (via origin URL) yet keeps distinct repos that merely
+    # share a root commit apart (different URLs), while local checkouts and
+    # their bare mirror still join through root+name.
+    parent = list(range(len(repos)))
 
-    projects = [_build_one(m, lineages) for m in groups.values()]
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    seen = {}
+    for i, r in enumerate(repos):
+        for k in _keys_for(r):
+            if k in seen:
+                union(i, seen[k])
+            else:
+                seen[k] = i
+
+    comps = {}
+    for i in range(len(repos)):
+        comps.setdefault(find(i), []).append(repos[i])
+
+    projects = [_build_one(m, lineages) for m in comps.values()]
     projects.sort(key=lambda p: _neg(p["last_commit"]))
     return projects
 
@@ -183,8 +283,46 @@ def _build_one(members, lineages):
     # Surface the most recently touched working copy (fall back to any copy).
     pool = [m for m in members if working(m)] or members
     surf = max(pool, key=lambda m: (m.get("last_commit") or ""))
-    name = next((m.get("name") for m in members if working(m)),
-                members[0].get("name"))
+    # Prefer the repo name from a hosting origin -- it's stable and canonical,
+    # so a checkout that happens to sit in a differently-named directory (cncpc's
+    # ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.
+    name = None
+    for m in members:
+        o = _origin_hosting(m)
+        if o:
+            name = _norm_url(o).split("/")[-1]
+            break
+    if not name:
+        name = next((m.get("name") for m in members if working(m)),
+                    members[0].get("name"))
+
+    # Where this project is backed up, as a neutral label (not a nag): a bare
+    # mirror or a non-hosting remote counts as "local"; github/gitlab/bitbucket
+    # as a hosting backup. A repo with both is genuinely covered on both.
+    urls = [u for m in members for u in (m.get("remotes") or {}).values()]
+    has_host = any(_is_hosting(u) for u in urls)
+    has_local = any(not _is_hosting(u) for u in urls) or any(m.get("is_bare") for m in members)
+    backup = ("host+local" if has_host and has_local else
+              "host" if has_host else "local" if has_local else "none")
+    host_label = ""
+    for u in urls:
+        lu = u.lower()
+        if "github.com" in lu:
+            host_label = "GitHub"; break
+        if "gitlab" in lu:
+            host_label = "GitLab"; break
+        if "bitbucket" in lu:
+            host_label = "Bitbucket"; break
+    if has_host and not host_label:
+        host_label = "hosted"
+    # For a repo backed up in both places, how far the newest copy is ahead of
+    # its hosting remote -- i.e. committed locally/to the NAS but not pushed up.
+    host_unpushed = 0
+    for m in members:
+        for rn, url in (m.get("remotes") or {}).items():
+            if _is_hosting(url):
+                host_unpushed = max(host_unpushed,
+                                    (m.get("unpushed_by_remote") or {}).get(rn) or 0)
 
     return {
         "name": name,
@@ -192,6 +330,9 @@ def _build_one(members, lineages):
         "multi_instance": len(members) > 1,
         "single_branch": len(branches) <= 1,
         "out_of_sync": any(not b["in_sync"] for b in branches),
+        "backup": backup,
+        "host_label": host_label,
+        "host_unpushed": host_unpushed,
         "last_commit": max((m.get("last_commit") or "") for m in members),
         "surfaced": {
             "branch": surf.get("branch"),

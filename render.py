@@ -220,8 +220,59 @@ def render_repos(repos, top_n=10):
         '<tbody>%s</tbody></table>%s' % (total, "".join(rows), more))
 
 
+def render_replicas(groups):
+    """Projects that exist in more than one place, and how far apart they are."""
+    if not groups:
+        return ""
+    out = []
+    for g in groups:
+        rows = []
+        for e in g["entries"]:
+            st, n = e["state"], e["count"]
+            if st == "leader":
+                badge = '<span class="badge clean">newest</span>'
+            elif st == "sync":
+                badge = '<span class="badge clean">in sync</span>'
+            elif st == "behind":
+                badge = ('<span class="badge unpushed">%d behind</span>'
+                         % n if n else '<span class="badge clean">in sync</span>')
+            elif st == "ahead":
+                badge = '<span class="badge dirty">%d ahead</span>' % n
+            elif st == "far":
+                badge = '<span class="badge unpushed">far behind</span>'
+            elif st == "nobranch":
+                badge = ('<span class="badge noremote">no %s</span>'
+                         % esc(e["branch"]))
+            else:
+                badge = '<span class="badge behind">diverged</span>'
+            extra = ""
+            if (e["dirty"] or 0) > 0:
+                extra = '<span class="badge dirty">%d dirty</span>' % e["dirty"]
+            if e["is_bare"]:
+                extra += '<span class="badge bare">bare</span>'
+            rows.append(
+                '<tr><td class="rmachine">%s</td>'
+                '<td class="rpath" title="%s">%s</td>'
+                '<td class="rbadges">%s%s</td></tr>'
+                % (esc(e["machine"]), esc(e["path"]), esc(e["path"]),
+                   badge, extra))
+        head = ('<span class="gname">%s</span>'
+                '<span class="gbranch">%s</span>'
+                '<span class="gstate %s">%s</span>'
+                % (esc(g["name"]), esc(g["branch"]),
+                   "ok" if g["in_sync"] else "warn",
+                   "all %d copies in sync" % g["copies"] if g["in_sync"]
+                   else "%d of %d out of date" % (g["stale"], g["copies"])))
+        out.append('<div class="rgroup"><div class="ghead">%s</div>'
+                   '<table class="repos rtable"><tbody>%s</tbody></table></div>'
+                   % (head, "".join(rows)))
+    return ('<div class="card"><div class="cardhead"><h2>Copies of the same project</h2>'
+            '<span class="hint">compared directly between machines &mdash; no fetch needed</span>'
+            '</div>%s</div>' % "".join(out))
+
+
 def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
-                root_warnings=None, repo_errors=None):
+                root_warnings=None, repo_errors=None, replica_groups=None):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -247,6 +298,7 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         "heatmap": heatmap_svg,
         "machines": render_machines(machines, repos, root_warnings, repo_errors),
         "repos": render_repos(repos, top_n),
+        "replicas": render_replicas(replica_groups or []),
         "scan_at": scan_at,
     }.items():
         out = out.replace("{{%s}}" % key, val)
@@ -315,6 +367,17 @@ table.repos tr:last-child td{border-bottom:0;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}
 .badge.bare,.badge.noremote{background:#21262d;color:var(--muted);}
 .badge.err{background:rgba(248,81,73,.22);color:var(--alert);}
+.rgroup{border-top:1px solid var(--line);padding:10px 0;}
+.rgroup:first-child{border-top:none;}
+.ghead{display:flex;align-items:baseline;gap:10px;margin-bottom:2px;}
+.gname{font-weight:600;}
+.gbranch{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;}
+.gstate{margin-left:auto;font-size:12px;}
+.gstate.ok{color:var(--accent);} .gstate.warn{color:var(--alert);}
+.rtable td{padding:3px 8px 3px 0;border:none;}
+.rpath{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px;
+       max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hint{color:var(--muted);font-size:12px;}
 .more{color:var(--accent);font-size:12px;margin-top:10px;cursor:pointer;display:inline-block;user-select:none;}
 .more:hover{text-decoration:underline;}
 </style></head><body>
@@ -346,6 +409,8 @@ table.repos tr:last-child td{border-bottom:0;}
   <div class="cardhead"><h2>Recent projects</h2></div>
   {{repos}}
 </div>
+
+{{replicas}}
 </div>
 <script>
 function refresh(){

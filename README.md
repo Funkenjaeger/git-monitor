@@ -116,6 +116,25 @@ GITMON_DB=data.db GITMON_CONFIG=config.yaml python app.py # http://localhost:808
   The common case is *"detected dubious ownership"* — you SSH in as a different
   user than the one that owns the checkout, and every field comes back null. Fix
   with `git config --global --add safe.directory <path>` on that host.
+- **Copies of the same project.** The same repo often lives in several places at
+  once — a checkout on your desktop, another on the box that actually runs it,
+  and a bare mirror acting as the local remote. Those are grouped into one card
+  showing which copy is newest and how far behind each other one is.
+
+  This is computed *between machines*, not from `git fetch`. The built-in
+  `behind` count compares against the local remote-tracking ref, which is only
+  as fresh as that machine's last fetch — so the case that matters most (you
+  push from your desktop, the server copy silently goes stale) reports
+  `behind=0`. Instead each copy reports its branch tips plus a capped ordered
+  history (`scan.py`), and [replicas.py](replicas.py) locates one copy's tip
+  inside another's history: the index *is* the number of commits behind. No
+  fetching, no network, and it still works when a machine can't reach the remote
+  at all.
+
+  Copies are matched on root-commit SHA **and** project name. Root SHA alone
+  over-groups: a project started by branching off another keeps the original
+  root commit forever, so `reflex-ui` and the `rotary-controller-python` it grew
+  out of look identical by that measure.
 - The heatmap aggregates commits across all repos/machines. A repo checked out
   on two machines can double-count shared history; acceptable for a personal view.
 - `unpushed` is the reliable "at-risk work" signal; `ahead`/`behind` need a

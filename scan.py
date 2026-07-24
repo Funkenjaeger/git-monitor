@@ -37,6 +37,12 @@ import sys
 from datetime import datetime, timezone
 
 GIT_TIMEOUT = 20  # seconds per git invocation
+# Per-branch history we ship back so the collector can compare copies of the
+# same repo across machines without any host having to fetch. Capped to keep
+# the JSON payload sane: a copy more than this far behind reports "far behind"
+# rather than an exact count.
+LINEAGE_BRANCHES = 5
+LINEAGE_DEPTH = 80
 # Directory names we never descend into while hunting for repos.
 PRUNE = {
     "node_modules", ".venv", "venv", "env", "__pycache__", ".mypy_cache",
@@ -143,6 +149,10 @@ def collect_repo(path, bare, since_days, authors=None):
         "last_commit": None,
         "commit_days": {},
         "error": None,
+        "head_sha": None,
+        "root_key": None,
+        "branch_tips": {},
+        "lineage": {},
     }
 
     ok, out = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd, gd)
@@ -182,6 +192,34 @@ def collect_repo(path, bare, since_days, authors=None):
     ok, out = run_git(["log", "-1", "--format=%cI"], cwd, gd)
     if ok and out.strip():
         info["last_commit"] = out.strip()
+
+    # --- replica identity -------------------------------------------------
+    # Root commit(s) survive cloning, so every copy of a project shares them.
+    # That's what lets the collector recognise the desktop checkout, the
+    # homelab checkout and the bare mirror as one project.
+    ok, out = run_git(["rev-parse", "HEAD"], cwd, gd)
+    if ok:
+        info["head_sha"] = out.strip() or None
+    ok, out = run_git(["rev-list", "--max-parents=0", "--all"], cwd, gd)
+    if ok:
+        roots = sorted(x.strip() for x in out.splitlines() if x.strip())
+        info["root_key"] = ",".join(roots[:4]) or None
+
+    ok, out = run_git(
+        ["for-each-ref", "--sort=-committerdate",
+         "--format=%(refname:short) %(objectname)", "refs/heads"], cwd, gd)
+    if ok:
+        for ln in out.splitlines():
+            parts = ln.split()
+            if len(parts) == 2:
+                info["branch_tips"][parts[0]] = parts[1]
+    # Ordered history per branch: position of another copy's tip in this list
+    # *is* the number of commits that copy is behind.
+    for b in list(info["branch_tips"])[:LINEAGE_BRANCHES]:
+        ok, out = run_git(
+            ["rev-list", "-n", str(LINEAGE_DEPTH), info["branch_tips"][b]], cwd, gd)
+        if ok:
+            info["lineage"][b] = [x.strip() for x in out.splitlines() if x.strip()]
 
     # Commit-day histogram across all refs within the window. When `authors` is
     # given, count only commits whose author matches one of the patterns

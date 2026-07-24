@@ -5,6 +5,7 @@ On a successful scan we replace a machine's repos + commit history atomically;
 on an unreachable machine we keep the last snapshot and just flag it offline.
 """
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -42,6 +43,13 @@ CREATE TABLE IF NOT EXISTS commit_days (
     count     INTEGER,
     PRIMARY KEY (machine, repo_path, day)
 );
+CREATE TABLE IF NOT EXISTS repo_lineage (
+    machine TEXT,
+    path    TEXT,
+    branch  TEXT,
+    shas    TEXT,
+    PRIMARY KEY (machine, path, branch)
+);
 CREATE TABLE IF NOT EXISTS machine_roots (
     machine TEXT,
     path    TEXT,
@@ -73,9 +81,10 @@ def connect(db_path):
 def _migrate(conn):
     """Add columns introduced after a DB was first created."""
     have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
-    if "error" not in have:
-        with conn:
-            conn.execute("ALTER TABLE repos ADD COLUMN error TEXT")
+    with conn:
+        for col in ("error", "head_sha", "root_key", "branch_tips"):
+            if col not in have:
+                conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
 
 
 def save_scan(conn, machine, ssh, remote_python, result):
@@ -94,6 +103,7 @@ def save_scan(conn, machine, ssh, remote_python, result):
         conn.execute("DELETE FROM repos WHERE machine=?", (machine,))
         conn.execute("DELETE FROM commit_days WHERE machine=?", (machine,))
         conn.execute("DELETE FROM machine_roots WHERE machine=?", (machine,))
+        conn.execute("DELETE FROM repo_lineage WHERE machine=?", (machine,))
         for rt in result.get("roots", []):
             conn.execute(
                 """INSERT OR REPLACE INTO machine_roots (machine, path, exists_, found)
@@ -104,8 +114,9 @@ def save_scan(conn, machine, ssh, remote_python, result):
             conn.execute(
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
-                    has_remote, is_bare, last_commit, updated_at, error)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    has_remote, is_bare, last_commit, updated_at, error,
+                    head_sha, root_key, branch_tips)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
@@ -113,8 +124,16 @@ def save_scan(conn, machine, ssh, remote_python, result):
                     1 if r.get("has_remote") else 0,
                     1 if r.get("is_bare") else 0,
                     r.get("last_commit"), ts, r.get("error"),
+                    r.get("head_sha"), r.get("root_key"),
+                    json.dumps(r.get("branch_tips") or {}),
                 ),
             )
+            for branch, shas in (r.get("lineage") or {}).items():
+                conn.execute(
+                    """INSERT OR REPLACE INTO repo_lineage (machine, path, branch, shas)
+                       VALUES (?,?,?,?)""",
+                    (machine, r.get("path"), branch, "\n".join(shas)),
+                )
             for day, count in (r.get("commit_days") or {}).items():
                 conn.execute(
                     """INSERT OR REPLACE INTO commit_days (machine, repo_path, day, count)
@@ -156,8 +175,29 @@ def get_machines(conn):
 
 
 def get_repos(conn):
-    return [dict(r) for r in conn.execute(
-        "SELECT * FROM repos ORDER BY last_commit DESC").fetchall()]
+    rows = []
+    for r in conn.execute("SELECT * FROM repos ORDER BY last_commit DESC"):
+        d = dict(r)
+        try:
+            d["branch_tips"] = json.loads(d.get("branch_tips") or "{}")
+        except (ValueError, TypeError):
+            d["branch_tips"] = {}
+        rows.append(d)
+    return rows
+
+
+def get_lineages(conn):
+    """(machine, path) -> {branch: [sha, ...]} for cross-copy comparison."""
+    out = {}
+    for r in conn.execute("SELECT machine, path, branch, shas FROM repo_lineage"):
+        out.setdefault((r["machine"], r["path"]), {})[r["branch"]] = \
+            (r["shas"] or "").split("\n")
+    return out
+
+
+def get_replica_groups(conn):
+    import replicas
+    return replicas.build_groups(get_repos(conn), get_lineages(conn))
 
 
 def get_root_warnings(conn):

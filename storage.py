@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS commit_days (
     count     INTEGER,
     PRIMARY KEY (machine, repo_path, day)
 );
+CREATE TABLE IF NOT EXISTS machine_roots (
+    machine TEXT,
+    path    TEXT,
+    exists_ INTEGER,
+    found   INTEGER,
+    PRIMARY KEY (machine, path)
+);
 CREATE INDEX IF NOT EXISTS idx_commit_days_day ON commit_days(day);
 CREATE INDEX IF NOT EXISTS idx_repos_machine ON repos(machine);
 """
@@ -76,6 +83,13 @@ def save_scan(conn, machine, ssh, remote_python, result):
         )
         conn.execute("DELETE FROM repos WHERE machine=?", (machine,))
         conn.execute("DELETE FROM commit_days WHERE machine=?", (machine,))
+        conn.execute("DELETE FROM machine_roots WHERE machine=?", (machine,))
+        for rt in result.get("roots", []):
+            conn.execute(
+                """INSERT OR REPLACE INTO machine_roots (machine, path, exists_, found)
+                   VALUES (?,?,?,?)""",
+                (machine, rt.get("path"), 1 if rt.get("exists") else 0, rt.get("found", 0)),
+            )
         for r in result.get("repos", []):
             conn.execute(
                 """INSERT INTO repos
@@ -134,6 +148,20 @@ def get_machines(conn):
 def get_repos(conn):
     return [dict(r) for r in conn.execute(
         "SELECT * FROM repos ORDER BY last_commit DESC").fetchall()]
+
+
+def get_root_warnings(conn):
+    """Roots that are missing or yielded no repos, keyed by machine.
+    Catches e.g. an unmounted NFS share silently dropping repos."""
+    rows = conn.execute(
+        "SELECT machine, path, exists_, found FROM machine_roots "
+        "WHERE exists_=0 OR found=0 ORDER BY machine, path").fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["machine"], []).append(
+            {"path": r["path"],
+             "reason": "missing" if not r["exists_"] else "no repos found"})
+    return out
 
 
 def get_commit_days(conn):

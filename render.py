@@ -141,7 +141,8 @@ def _machine_totals(repos):
     return agg
 
 
-def render_machines(machines, repos):
+def render_machines(machines, repos, root_warnings=None):
+    root_warnings = root_warnings or {}
     totals = _machine_totals(repos)
     cards = []
     for m in machines:
@@ -156,6 +157,13 @@ def render_machines(machines, repos):
         if not online and m["error"]:
             err = '<div class="merr" title="%s">%s</div>' % (
                 esc(m["error"]), esc(m["error"][:60]))
+        # Flag configured roots that are missing or yielded nothing (e.g. an
+        # unmounted NFS share) so repos don't just silently disappear.
+        for w in root_warnings.get(m["name"], []):
+            err += ('<div class="mwarn" title="configured root %s: %s">'
+                    '&#9888; root %s: %s</div>'
+                    % (esc(w["path"]), esc(w["reason"]),
+                       esc(w["path"]), esc(w["reason"])))
         cards.append(
             '<div class="mcard %s"><div class="mrow"><span class="dot %s"></span>'
             '<span class="mname">%s</span><span class="mstatus">%s</span></div>'
@@ -198,7 +206,8 @@ def render_repos(repos, top_n=10):
         '<tbody>%s</tbody></table>%s' % (total, "".join(rows), more))
 
 
-def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None):
+def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
+                root_warnings=None):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -222,7 +231,7 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None)
         "stats": stats,
         "year_total": str(year_total),
         "heatmap": heatmap_svg,
-        "machines": render_machines(machines, repos),
+        "machines": render_machines(machines, repos, root_warnings),
         "repos": render_repos(repos, top_n),
         "scan_at": scan_at,
     }.items():
@@ -276,6 +285,7 @@ button:disabled{opacity:.6;cursor:default;}
 .mname{font-weight:600;} .mstatus{color:var(--muted);font-size:12px;margin-left:auto;}
 .msub{color:var(--fg);font-size:12px;margin-top:6px;} .mseen{color:var(--muted);font-size:11px;margin-top:2px;}
 .merr{color:var(--warn);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mwarn{color:var(--alert);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 table.repos{width:100%;border-collapse:collapse;}
 table.repos th{text-align:left;color:var(--muted);font-size:11px;font-weight:600;
  text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--border);}

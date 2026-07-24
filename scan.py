@@ -263,6 +263,7 @@ def main():
         "host": _hostname(),
         "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "repos": [],
+        "roots": [],
         "errors": [],
     }
 
@@ -273,6 +274,9 @@ def main():
             continue
         depth = int(root.get("depth", 2))
         bare = bool(root.get("bare", False))
+        # Track whether the root is actually there and how much it yielded, so
+        # an unmounted share shows up as a warning instead of silently fewer repos.
+        found = 0
         try:
             for repo_path, is_bare in find_repos(path, depth, bare, exclude):
                 np = norm(repo_path)
@@ -280,8 +284,14 @@ def main():
                     continue
                 seen.add(np)
                 result["repos"].append(collect_repo(repo_path, is_bare, since_days, authors))
+                found += 1
         except Exception as exc:  # never let one root sink the whole scan
             result["errors"].append("root %s: %s" % (path, exc))
+        result["roots"].append({
+            "path": norm(path),
+            "exists": os.path.isdir(path),
+            "found": found,
+        })
 
     for path in cfg.get("extra", []):
         np = norm(path)

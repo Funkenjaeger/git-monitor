@@ -79,6 +79,7 @@ def index():
         machines = storage.get_machines(conn)
         repos = storage.get_repos(conn)
         commit_days = storage.get_commit_days(conn)
+        root_warnings = storage.get_root_warnings(conn)
     finally:
         conn.close()
     try:
@@ -86,7 +87,8 @@ def index():
     except Exception:
         top_n = 12
     return render_page(summary, machines, repos, commit_days,
-                       top_n=top_n, last_scan=_last_scan)
+                       top_n=top_n, last_scan=_last_scan,
+                       root_warnings=root_warnings)
 
 
 @app.route("/api/summary")
@@ -107,6 +109,7 @@ def api_data():
             "machines": storage.get_machines(conn),
             "repos": storage.get_repos(conn),
             "commit_days": storage.get_commit_days(conn),
+            "root_warnings": storage.get_root_warnings(conn),
             "last_scan": _last_scan,
         })
     finally:

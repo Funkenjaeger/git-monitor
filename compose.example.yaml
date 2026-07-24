@@ -16,8 +16,11 @@ services:
     volumes:
       # config.yaml, data.db, id_ed25519, known_hosts
       - /opt/apps/git-monitor/data:/data
-      # local scan targets (read-only) — adjust to where your repos live
-      - /mnt/git:/mnt/git:ro
+      # Local scan targets (read-only). If a target lives on a network share,
+      # bind its PARENT with rslave rather than the share itself: binding an
+      # unmounted/autofs path stops the container from starting at all, and
+      # rslave lets a share that mounts later become visible without a restart.
+      - /mnt:/mnt:ro,rslave
       - /home/user:/home/user:ro
     networks:
       - app-net

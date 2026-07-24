@@ -306,8 +306,16 @@ def render_projects(projects):
         left = ('%s<span class="pname" title="%s">%s</span>'
                 '<span class="pbranch">%s</span>'
                 % (toggle, esc(loc), esc(p["name"]), esc(s["branch"] or "—")))
-        right = (meta
-                 + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"])
+        # When copies disagree, say so on the row itself — reporting the leader
+        # as "clean" beside an amber copies chip reads as a contradiction.
+        sync = ""
+        if p["out_of_sync"]:
+            sync = ('<span class="badge behind">%d behind</span>' % s["lag"]
+                    if s.get("lag") else
+                    '<span class="badge behind">out of sync</span>')
+        right = (meta + sync
+                 + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
+                                  clean_ok=not sync)
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(
@@ -345,11 +353,19 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
     last_at = max(times) if times else (last_scan.get("at") if last_scan else None)
     scan_at = rel_time(last_at) if last_at else "—"
 
-    stat = lambda label, val, cls="": (
-        '<div class="stat %s"><div class="snum">%s</div>'
-        '<div class="slabel">%s</div></div>' % (cls, val, label))
+    stat = lambda label, val, cls="", title="": (
+        '<div class="stat %s"%s><div class="snum">%s</div>'
+        '<div class="slabel">%s</div></div>'
+        % (cls, (' title="%s"' % esc(title)) if title else "", val, label))
+    # Count projects, not checkouts — the list below is per-project, and the two
+    # numbers differ (one project can be checked out on several machines).
+    # The checkout count still matters, so keep it in the label.
+    n_projects = len(projects or [])
+    n_repos = summary["total_repos"]
     stats = "".join([
-        stat("repositories", summary["total_repos"]),
+        stat("projects &middot; %d checkouts" % n_repos, n_projects or n_repos,
+             title="%d projects across %d checkouts (a project checked out on "
+                   "several machines counts once)" % (n_projects, n_repos)),
         stat("with uncommitted", summary["dirty_repos"], "warn" if summary["dirty_repos"] else ""),
         stat("with unpushed", summary["unpushed_repos"], "alert" if summary["unpushed_repos"] else ""),
         stat("unpushed commits", summary["unpushed_commits"], "alert" if summary["unpushed_commits"] else ""),

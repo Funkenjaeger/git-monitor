@@ -296,6 +296,34 @@ def _build_one(members, lineages):
     # Surface the most recently touched working copy (fall back to any copy).
     pool = [m for m in members if working(m)] or members
     surf = max(pool, key=lambda m: (m.get("last_commit") or ""))
+    surfaced = {
+        "branch": surf.get("branch"),
+        "machine": surf.get("machine"), "path": surf.get("path"),
+        "dirty": surf.get("dirty"), "unpushed": surf.get("unpushed"),
+        "is_bare": bool(surf.get("is_bare")), "error": surf.get("error"),
+        "last_commit": surf.get("last_commit"),
+    }
+    # ...unless the copies disagree somewhere. Then show the branch they
+    # disagree on, from the copy that's furthest ahead. A collapsed row is
+    # triage: it should point at what needs attention, not at whatever was
+    # touched last -- otherwise the row reads "clean" while its own copies
+    # chip warns, which is exactly the branch you can't see.
+    problem = next((b for b in branches if not b["in_sync"] and b["entries"]), None)
+    if problem:
+        e = next((x for x in problem["entries"] if x["state"] == "leader"),
+                 problem["entries"][0])
+        lags = [x["count"] for x in problem["entries"]
+                if x["state"] == "behind" and x["count"]]
+        surfaced = {
+            "branch": problem["name"],
+            "machine": e["machine"], "path": e["path"],
+            "dirty": e["dirty"], "unpushed": e["unpushed"],
+            "is_bare": e["is_bare"], "error": e["error"],
+            "last_commit": e["last_commit"],
+            # How far the worst-off copy trails, so the collapsed row can say
+            # what's wrong instead of reporting the leader as "clean".
+            "lag": max(lags) if lags else None,
+        }
     # Prefer the repo name from a hosting origin -- it's stable and canonical,
     # so a checkout that happens to sit in a differently-named directory (cncpc's
     # ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.
@@ -347,12 +375,6 @@ def _build_one(members, lineages):
         "host_label": host_label,
         "host_unpushed": host_unpushed,
         "last_commit": max((m.get("last_commit") or "") for m in members),
-        "surfaced": {
-            "branch": surf.get("branch"),
-            "machine": surf.get("machine"), "path": surf.get("path"),
-            "dirty": surf.get("dirty"), "unpushed": surf.get("unpushed"),
-            "is_bare": bool(surf.get("is_bare")), "error": surf.get("error"),
-            "last_commit": surf.get("last_commit"),
-        },
+        "surfaced": surfaced,
         "branches": branches,
     }

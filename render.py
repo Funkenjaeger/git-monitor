@@ -132,12 +132,18 @@ def render_heatmap(commit_days):
 def _machine_totals(repos):
     agg = {}
     for r in repos:
-        a = agg.setdefault(r["machine"], {"repos": 0, "dirty": 0, "unpushed": 0})
+        a = agg.setdefault(r["machine"],
+                            {"repos": 0, "dirty": 0, "unpushed": 0,
+                             "stashes": 0, "untracked": 0})
         a["repos"] += 1
         if (r["dirty"] or 0) > 0:
             a["dirty"] += 1
         if (r["unpushed"] or 0) > 0:
             a["unpushed"] += 1
+        if (r["stashes"] or 0) > 0:
+            a["stashes"] += 1
+        if (r["untracked"] or 0) > 0:
+            a["untracked"] += 1
     return agg
 
 
@@ -147,12 +153,13 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     totals = _machine_totals(repos)
     cards = []
     for m in machines:
-        t = totals.get(m["name"], {"repos": 0, "dirty": 0, "unpushed": 0})
+        t = totals.get(m["name"], {"repos": 0, "dirty": 0, "unpushed": 0,
+                                    "stashes": 0, "untracked": 0})
         online = bool(m["reachable"])
         dot = "on" if online else "off"
         status = "online" if online else "offline"
-        sub = ("%d repos · %d dirty · %d unpushed"
-               % (t["repos"], t["dirty"], t["unpushed"]))
+        sub = ("%d repos · %d dirty · %d unpushed · %d stashed · %d untracked"
+               % (t["repos"], t["dirty"], t["unpushed"], t["stashes"], t["untracked"]))
         seen = rel_time(m["last_scanned"])
         err = ""
         if not online and m["error"]:
@@ -184,14 +191,24 @@ CHEV = '<span class="chev">&#9656;</span>'   # ▸ rotates to ▾ when open
 GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 
-def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True):
-    """The dirty / unpushed / unreadable / bare chips for one instance."""
+def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
+                    stashes=None, untracked=None):
+    """The dirty / unpushed / stash / untracked / unreadable / bare chips for
+    one instance."""
     b = []
     if error:
         b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
                  % esc(error))
     if (dirty or 0) > 0:
         b.append('<span class="badge dirty">%d dirty</span>' % dirty)
+    if (untracked or 0) > 0:
+        # Already folded into "dirty" above (status --porcelain reports
+        # untracked files too) -- called out separately so "new work nobody
+        # `git add`ed yet" doesn't hide inside a generic dirty count.
+        b.append('<span class="badge untracked">%d untracked</span>' % untracked)
+    if (stashes or 0) > 0:
+        b.append('<span class="badge stash">%d stash%s</span>'
+                 % (stashes, "" if stashes == 1 else "es"))
     if (unpushed or 0) > 0:
         b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
     if is_bare:
@@ -225,7 +242,8 @@ def _instance_row(pid, bid, e, level):
             % (GAP, esc(e["machine"]), esc(loc), esc(e["path"])))
     right = (_sync_badge(e["state"], e["count"])
              + _status_badges(e["dirty"], e["unpushed"], e["error"],
-                              e["is_bare"], clean_ok=False)
+                              e["is_bare"], clean_ok=False,
+                              stashes=e.get("stashes"), untracked=e.get("untracked"))
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
     return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
             '<span class="tleft">%s</span><span class="tright">%s</span></div>'
@@ -240,7 +258,8 @@ def _branch_row(pid, bid, br, level):
     if single:
         e = br["entries"][0]
         toggle = GAP
-        summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"])
+        summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
+                              stashes=e.get("stashes"), untracked=e.get("untracked"))
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
         machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
         attrs = 'data-leaf="1"'
@@ -315,7 +334,8 @@ def render_projects(projects):
                     '<span class="badge behind">out of sync</span>')
         right = (meta + sync
                  + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
-                                  clean_ok=not sync)
+                                  clean_ok=not sync,
+                                  stashes=s.get("stashes"), untracked=s.get("untracked"))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(
@@ -369,6 +389,9 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         stat("with uncommitted", summary["dirty_repos"], "warn" if summary["dirty_repos"] else ""),
         stat("with unpushed", summary["unpushed_repos"], "alert" if summary["unpushed_repos"] else ""),
         stat("unpushed commits", summary["unpushed_commits"], "alert" if summary["unpushed_commits"] else ""),
+        stat("with stashes", summary["stash_repos"], "warn" if summary["stash_repos"] else "",
+             title="repos with entries on refs/stash -- invisible to every other check here"),
+        stat("with untracked", summary["untracked_repos"], "warn" if summary["untracked_repos"] else ""),
         stat("offline machines", summary["offline_machines"], "warn" if summary["offline_machines"] else ""),
     ])
 
@@ -463,6 +486,8 @@ button:disabled{opacity:.6;cursor:default;}
 .gstate{font-size:12px;} .gstate.ok{color:var(--muted);} .gstate.warn{color:var(--warn);}
 .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-left:5px;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}
+.badge.untracked{background:rgba(210,153,34,.15);color:var(--warn);}
+.badge.stash{background:rgba(163,113,247,.18);color:#a371f7;}
 .badge.unpushed{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}

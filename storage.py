@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS repos (
     ahead       INTEGER,
     behind      INTEGER,
     unpushed    INTEGER,
+    stashes     INTEGER,
+    untracked   INTEGER,
     has_remote  INTEGER,
     is_bare     INTEGER,
     last_commit TEXT,
@@ -86,6 +88,13 @@ def _migrate(conn):
                     "remotes", "unpushed_by_remote"):
             if col not in have:
                 conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
+        # stashes/untracked are counts, not text — CREATE TABLE declares them
+        # INTEGER for fresh DBs (see SCHEMA above); an existing DB upgrading in
+        # place only ever sees them through this ALTER path, so it must match
+        # that affinity here too, or inserted ints come back out as strings.
+        for col in ("stashes", "untracked"):
+            if col not in have:
+                conn.execute("ALTER TABLE repos ADD COLUMN %s INTEGER" % col)
 
 
 def save_scan(conn, machine, ssh, remote_python, result):
@@ -115,14 +124,16 @@ def save_scan(conn, machine, ssh, remote_python, result):
             conn.execute(
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
+                    stashes, untracked,
                     has_remote, is_bare, last_commit, updated_at, error,
                     head_sha, root_key, branch_tips, branch_dates,
                     remotes, unpushed_by_remote)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
                     r.get("unpushed"),
+                    r.get("stashes"), r.get("untracked"),
                     1 if r.get("has_remote") else 0,
                     1 if r.get("is_bare") else 0,
                     r.get("last_commit"), ts, r.get("error"),
@@ -246,11 +257,15 @@ def get_summary(conn):
     dirty_repos = sum(1 for r in repos if (r["dirty"] or 0) > 0)
     unpushed_repos = sum(1 for r in repos if (r["unpushed"] or 0) > 0)
     unpushed_commits = sum(r["unpushed"] or 0 for r in repos)
+    stash_repos = sum(1 for r in repos if (r["stashes"] or 0) > 0)
+    untracked_repos = sum(1 for r in repos if (r["untracked"] or 0) > 0)
     offline = sum(1 for m in machines if not m["reachable"])
     return {
         "total_repos": len(repos),
         "dirty_repos": dirty_repos,
         "unpushed_repos": unpushed_repos,
+        "stash_repos": stash_repos,
+        "untracked_repos": untracked_repos,
         "unpushed_commits": unpushed_commits,
         "machines": len(machines),
         "offline_machines": offline,

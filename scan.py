@@ -145,6 +145,8 @@ def collect_repo(path, bare, since_days, authors=None):
         "ahead": None,
         "behind": None,
         "unpushed": None,
+        "stashes": None,
+        "untracked": None,
         "has_remote": None,
         "last_commit": None,
         "commit_days": {},
@@ -171,6 +173,22 @@ def collect_repo(path, bare, since_days, authors=None):
         ok, out = run_git(["status", "--porcelain"], cwd, gd)
         if ok:
             info["dirty"] = sum(1 for ln in out.splitlines() if ln.strip())
+        # Untracked-but-not-ignored files are already folded into "dirty" above
+        # (status --porcelain reports them as "?? path"), but that hides them
+        # inside a generic count indistinguishable from modified tracked files.
+        # Surface them separately so "N untracked" can be its own signal (e.g.
+        # a whole new module that was never `git add`ed) distinct from "N dirty"
+        # (changes to files git already knows about).
+        ok, out = run_git(["ls-files", "--others", "--exclude-standard"], cwd, gd)
+        if ok:
+            info["untracked"] = sum(1 for ln in out.splitlines() if ln.strip())
+        # Stashes are invisible to `status --porcelain` and everything else
+        # collected here -- a `git stash` tucks changes onto refs/stash where no
+        # ahead/behind or dirty check will ever see them. `stash list` reads
+        # that ref's reflog directly; each line is one stash entry.
+        ok, out = run_git(["stash", "list"], cwd, gd)
+        if ok:
+            info["stashes"] = sum(1 for ln in out.splitlines() if ln.strip())
         # ahead/behind vs upstream; guarded — many repos have no upstream.
         ok, out = run_git(
             ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd, gd

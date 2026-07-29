@@ -197,9 +197,9 @@ GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
                     stashes=None, untracked=None, precious_files=None,
-                    worktrees=None):
+                    worktrees=None, has_remote=None):
     """The dirty / unpushed / stash / untracked / precious / worktree /
-    unreadable / bare chips for one instance."""
+    no-remote / unreadable / bare chips for one instance."""
     b = []
     if error:
         b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
@@ -228,6 +228,13 @@ def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
                  % (worktrees, "" if worktrees == 1 else "s"))
     if (unpushed or 0) > 0:
         b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
+    if has_remote is not None and not has_remote and not is_bare:
+        # No remote at all: "unpushed" is structurally 0 here, because there is
+        # nowhere to push to -- so this repo reads as clean while being the one
+        # kind that has no off-machine copy of its history. Bare repos are
+        # excluded deliberately: /mnt/git IS the remote, so having none is
+        # correct there and flagging it would be noise on every repo.
+        b.append('<span class="badge noremote">no remote</span>')
     if is_bare:
         b.append('<span class="badge bare">bare</span>')
     if not b and clean_ok:
@@ -262,7 +269,8 @@ def _instance_row(pid, bid, e, level):
                               e["is_bare"], clean_ok=False,
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
                               precious_files=e.get("precious_files"),
-                              worktrees=e.get("worktrees"))
+                              worktrees=e.get("worktrees"),
+                              has_remote=e.get("has_remote"))
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
     return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
             '<span class="tleft">%s</span><span class="tright">%s</span></div>'
@@ -280,7 +288,8 @@ def _branch_row(pid, bid, br, level):
         summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
                               precious_files=e.get("precious_files"),
-                              worktrees=e.get("worktrees"))
+                              worktrees=e.get("worktrees"),
+                              has_remote=e.get("has_remote"))
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
         machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
         attrs = 'data-leaf="1"'
@@ -358,7 +367,8 @@ def render_projects(projects):
                                   clean_ok=not sync,
                                   stashes=s.get("stashes"), untracked=s.get("untracked"),
                                   precious_files=s.get("precious_files"),
-                                  worktrees=s.get("worktrees"))
+                                  worktrees=s.get("worktrees"),
+                                  has_remote=s.get("has_remote"))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(

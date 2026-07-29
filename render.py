@@ -134,7 +134,7 @@ def _machine_totals(repos):
     for r in repos:
         a = agg.setdefault(r["machine"],
                             {"repos": 0, "dirty": 0, "unpushed": 0,
-                             "stashes": 0, "untracked": 0})
+                             "stashes": 0, "untracked": 0, "precious": 0})
         a["repos"] += 1
         if (r["dirty"] or 0) > 0:
             a["dirty"] += 1
@@ -144,6 +144,8 @@ def _machine_totals(repos):
             a["stashes"] += 1
         if (r["untracked"] or 0) > 0:
             a["untracked"] += 1
+        if r.get("precious_files"):
+            a["precious"] += 1
     return agg
 
 
@@ -154,12 +156,14 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     cards = []
     for m in machines:
         t = totals.get(m["name"], {"repos": 0, "dirty": 0, "unpushed": 0,
-                                    "stashes": 0, "untracked": 0})
+                                    "stashes": 0, "untracked": 0, "precious": 0})
         online = bool(m["reachable"])
         dot = "on" if online else "off"
         status = "online" if online else "offline"
         sub = ("%d repos · %d dirty · %d unpushed · %d stashed · %d untracked"
                % (t["repos"], t["dirty"], t["unpushed"], t["stashes"], t["untracked"]))
+        if t["precious"]:
+            sub += " · %d precious" % t["precious"]
         seen = rel_time(m["last_scanned"])
         err = ""
         if not online and m["error"]:
@@ -192,9 +196,9 @@ GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 
 def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
-                    stashes=None, untracked=None):
-    """The dirty / unpushed / stash / untracked / unreadable / bare chips for
-    one instance."""
+                    stashes=None, untracked=None, precious_files=None):
+    """The dirty / unpushed / stash / untracked / precious / unreadable / bare
+    chips for one instance."""
     b = []
     if error:
         b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
@@ -209,6 +213,13 @@ def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
     if (stashes or 0) > 0:
         b.append('<span class="badge stash">%d stash%s</span>'
                  % (stashes, "" if stashes == 1 else "es"))
+    if precious_files:
+        # A declared-precious path is gitignored -- git will never track,
+        # diff, commit or push it, so this can't hide inside dirty/unpushed
+        # the way untracked does. It's the only badge that means "this file
+        # has no backup at all", so it gets the alarm color, not the warn one.
+        b.append('<span class="badge precious" title="%s">&#9888; %d precious</span>'
+                 % (esc(", ".join(precious_files)), len(precious_files)))
     if (unpushed or 0) > 0:
         b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
     if is_bare:
@@ -243,7 +254,8 @@ def _instance_row(pid, bid, e, level):
     right = (_sync_badge(e["state"], e["count"])
              + _status_badges(e["dirty"], e["unpushed"], e["error"],
                               e["is_bare"], clean_ok=False,
-                              stashes=e.get("stashes"), untracked=e.get("untracked"))
+                              stashes=e.get("stashes"), untracked=e.get("untracked"),
+                              precious_files=e.get("precious_files"))
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
     return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
             '<span class="tleft">%s</span><span class="tright">%s</span></div>'
@@ -259,7 +271,8 @@ def _branch_row(pid, bid, br, level):
         e = br["entries"][0]
         toggle = GAP
         summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
-                              stashes=e.get("stashes"), untracked=e.get("untracked"))
+                              stashes=e.get("stashes"), untracked=e.get("untracked"),
+                              precious_files=e.get("precious_files"))
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
         machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
         attrs = 'data-leaf="1"'
@@ -335,7 +348,8 @@ def render_projects(projects):
         right = (meta + sync
                  + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
                                   clean_ok=not sync,
-                                  stashes=s.get("stashes"), untracked=s.get("untracked"))
+                                  stashes=s.get("stashes"), untracked=s.get("untracked"),
+                                  precious_files=s.get("precious_files"))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(
@@ -392,6 +406,11 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         stat("with stashes", summary["stash_repos"], "warn" if summary["stash_repos"] else "",
              title="repos with entries on refs/stash -- invisible to every other check here"),
         stat("with untracked", summary["untracked_repos"], "warn" if summary["untracked_repos"] else ""),
+        stat("precious at risk", summary["precious_files_total"],
+             "alert" if summary["precious_files_total"] else "",
+             title="declared-precious files (see config precious_patterns) that git "
+                   "is ignoring -- across %d repo(s); ignored means never committed, "
+                   "diffed or pushed, by design or by accident" % summary["precious_repos"]),
         stat("offline machines", summary["offline_machines"], "warn" if summary["offline_machines"] else ""),
     ])
 
@@ -488,6 +507,7 @@ button:disabled{opacity:.6;cursor:default;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.untracked{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.stash{background:rgba(163,113,247,.18);color:#a371f7;}
+.badge.precious{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.unpushed{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}

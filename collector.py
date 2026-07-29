@@ -45,6 +45,8 @@ def build_scan_config(target, defaults):
         "machine": target["name"],
         "since_days": target.get("since_days", defaults.get("since_days", 365)),
         "authors": target.get("authors", defaults.get("authors", [])),
+        "precious_patterns": target.get("precious_patterns",
+                                        defaults.get("precious_patterns", [])),
         "roots": target.get("roots", []),
         "extra": target.get("extra", []),
         "exclude": target.get("exclude", []),

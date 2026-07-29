@@ -18,7 +18,15 @@ Config schema (all keys optional except roots/extra — supply at least one):
         {"path": "/mnt/git",    "depth": 1, "bare": true}
       ],
       "extra":   ["D:/oneoff/weird-repo"],   # explicit repo paths, not walked
-      "exclude": ["C:/projects/linuxcnc"]    # path prefixes to skip
+      "exclude": ["C:/projects/linuxcnc"],   # path prefixes to skip
+      "precious_patterns": ["credentials.json", "token.json", "*.env", "secrets/*"]
+      # ^ declared, not inferred -- a regenerable __pycache__ and an
+      # irreplaceable OAuth token look identical to git (both just "ignored").
+      # A pattern with no "/" matches a filename at any depth (like a
+      # .gitignore rule without one); a pattern with a "/" is anchored to the
+      # repo root. Checked against `git status --ignored`, so only files git
+      # is actually ignoring are ever considered -- a merely-untracked file is
+      # untracked's problem, not this one's.
     }
 
 Config may be provided as:
@@ -30,6 +38,7 @@ Add --pretty for indented output when testing by hand.
 """
 
 import base64
+import fnmatch
 import json
 import os
 import subprocess
@@ -126,7 +135,23 @@ def find_repos(root_path, depth, bare, exclude):
                 stack.append((e.path, level + 1))
 
 
-def collect_repo(path, bare, since_days, authors=None):
+def _matches_precious(rel_path, patterns):
+    """True if rel_path (posix-style, repo-root-relative) matches a declared
+    precious pattern. A pattern with no "/" matches the basename at any depth
+    (same convention as a slash-less .gitignore rule); one with a "/" is
+    anchored to the repo root -- so "secrets/*" means the top-level secrets
+    dir, not any directory named secrets anywhere in the tree."""
+    base = rel_path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        if "/" in pat:
+            if fnmatch.fnmatch(rel_path, pat):
+                return True
+        elif fnmatch.fnmatch(base, pat):
+            return True
+    return False
+
+
+def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
     """Gather cheap status for one repo. Returns a dict; never raises."""
     path = norm(path)
     name = os.path.basename(path)
@@ -147,6 +172,7 @@ def collect_repo(path, bare, since_days, authors=None):
         "unpushed": None,
         "stashes": None,
         "untracked": None,
+        "precious_files": None,
         "has_remote": None,
         "last_commit": None,
         "commit_days": {},
@@ -189,6 +215,27 @@ def collect_repo(path, bare, since_days, authors=None):
         ok, out = run_git(["stash", "list"], cwd, gd)
         if ok:
             info["stashes"] = sum(1 for ln in out.splitlines() if ln.strip())
+        # Declared-precious files that are gitignored. Heuristics can't tell a
+        # regenerable __pycache__ from an irreplaceable OAuth token -- both are
+        # just "ignored" to git -- so this checks a declared list of patterns
+        # instead of guessing. Plain `--ignored` collapses a whole ignored
+        # directory to one line (e.g. "!! secrets/"), which a "secrets/*"
+        # pattern can't match against; `--untracked-files=all` is what makes
+        # git list each individual file inside it instead.
+        if precious_patterns:
+            ok, out = run_git(
+                ["status", "--porcelain", "--ignored", "--untracked-files=all"],
+                cwd, gd,
+            )
+            if ok:
+                hits = []
+                for ln in out.splitlines():
+                    if not ln.startswith("!! "):
+                        continue
+                    rel = ln[3:].strip().strip('"')
+                    if _matches_precious(rel, precious_patterns):
+                        hits.append(rel)
+                info["precious_files"] = hits
         # ahead/behind vs upstream; guarded — many repos have no upstream.
         ok, out = run_git(
             ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd, gd
@@ -348,6 +395,7 @@ def main():
     cfg, pretty = load_config(sys.argv)
     since_days = int(cfg.get("since_days", 365))
     authors = cfg.get("authors") or []
+    precious_patterns = cfg.get("precious_patterns") or []
     exclude = [norm(p) for p in cfg.get("exclude", [])]
 
     result = {
@@ -375,7 +423,8 @@ def main():
                 if np in seen:
                     continue
                 seen.add(np)
-                result["repos"].append(collect_repo(repo_path, is_bare, since_days, authors))
+                result["repos"].append(collect_repo(
+                    repo_path, is_bare, since_days, authors, precious_patterns))
                 found += 1
         except Exception as exc:  # never let one root sink the whole scan
             result["errors"].append("root %s: %s" % (path, exc))
@@ -393,7 +442,8 @@ def main():
             continue
         seen.add(np)
         bare = is_bare_repo(path) and not is_worktree_repo(path)
-        result["repos"].append(collect_repo(path, bare, since_days, authors))
+        result["repos"].append(collect_repo(
+            path, bare, since_days, authors, precious_patterns))
 
     text = json.dumps(result, indent=2 if pretty else None, sort_keys=pretty)
     sys.stdout.write(text + "\n")

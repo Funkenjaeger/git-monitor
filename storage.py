@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS repos (
     unpushed    INTEGER,
     stashes     INTEGER,
     untracked   INTEGER,
+    precious_files TEXT,
     has_remote  INTEGER,
     is_bare     INTEGER,
     last_commit TEXT,
@@ -84,8 +85,14 @@ def _migrate(conn):
     """Add columns introduced after a DB was first created."""
     have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
     with conn:
+        # precious_files joins this TEXT loop (not the INTEGER one below) --
+        # it's a JSON-encoded list of matched paths, not a count, same shape
+        # as remotes/branch_tips. Reusing an INTEGER column here for a value
+        # that is actually text is exactly the CREATE/ALTER affinity mismatch
+        # that broke the stashes/untracked migration; matching it to the
+        # column's real type on both paths avoids that bug outright.
         for col in ("error", "head_sha", "root_key", "branch_tips", "branch_dates",
-                    "remotes", "unpushed_by_remote"):
+                    "remotes", "unpushed_by_remote", "precious_files"):
             if col not in have:
                 conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
         # stashes/untracked are counts, not text — CREATE TABLE declares them
@@ -124,16 +131,19 @@ def save_scan(conn, machine, ssh, remote_python, result):
             conn.execute(
                 """INSERT INTO repos
                    (machine, path, name, branch, dirty, ahead, behind, unpushed,
-                    stashes, untracked,
+                    stashes, untracked, precious_files,
                     has_remote, is_bare, last_commit, updated_at, error,
                     head_sha, root_key, branch_tips, branch_dates,
                     remotes, unpushed_by_remote)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     machine, r.get("path"), r.get("name"), r.get("branch"),
                     r.get("dirty"), r.get("ahead"), r.get("behind"),
                     r.get("unpushed"),
                     r.get("stashes"), r.get("untracked"),
+                    # None (not configured for this scan) stays NULL, distinct
+                    # from "[]" (configured, nothing matched) -- see get_repos().
+                    json.dumps(r["precious_files"]) if r.get("precious_files") is not None else None,
                     1 if r.get("has_remote") else 0,
                     1 if r.get("is_bare") else 0,
                     r.get("last_commit"), ts, r.get("error"),
@@ -199,6 +209,17 @@ def get_repos(conn):
                 d[col] = json.loads(d.get(col) or "{}")
             except (ValueError, TypeError):
                 d[col] = {}
+        # NULL means precious_patterns wasn't configured for this scan (no
+        # opinion); "[]" means it was configured and nothing matched. Keep
+        # that distinction instead of collapsing both to the same default.
+        raw = d.get("precious_files")
+        if raw is None:
+            d["precious_files"] = None
+        else:
+            try:
+                d["precious_files"] = json.loads(raw)
+            except (ValueError, TypeError):
+                d["precious_files"] = None
         rows.append(d)
     return rows
 
@@ -259,6 +280,8 @@ def get_summary(conn):
     unpushed_commits = sum(r["unpushed"] or 0 for r in repos)
     stash_repos = sum(1 for r in repos if (r["stashes"] or 0) > 0)
     untracked_repos = sum(1 for r in repos if (r["untracked"] or 0) > 0)
+    precious_repos = sum(1 for r in repos if r.get("precious_files"))
+    precious_files_total = sum(len(r.get("precious_files") or []) for r in repos)
     offline = sum(1 for m in machines if not m["reachable"])
     return {
         "total_repos": len(repos),
@@ -266,6 +289,8 @@ def get_summary(conn):
         "unpushed_repos": unpushed_repos,
         "stash_repos": stash_repos,
         "untracked_repos": untracked_repos,
+        "precious_repos": precious_repos,
+        "precious_files_total": precious_files_total,
         "unpushed_commits": unpushed_commits,
         "machines": len(machines),
         "offline_machines": offline,

@@ -256,6 +256,7 @@ def _build_one(members, lineages):
                 "is_bare": bool(m.get("is_bare")), "dirty": m.get("dirty"),
                 "unpushed": m.get("unpushed"), "error": m.get("error"),
                 "stashes": m.get("stashes"), "untracked": m.get("untracked"),
+                "precious_files": m.get("precious_files"),
                 "last_commit": dates(m).get(b) or m.get("last_commit"),
                 "branch": b, "state": state, "count": count,
             })
@@ -302,6 +303,7 @@ def _build_one(members, lineages):
         "machine": surf.get("machine"), "path": surf.get("path"),
         "dirty": surf.get("dirty"), "unpushed": surf.get("unpushed"),
         "stashes": surf.get("stashes"), "untracked": surf.get("untracked"),
+        "precious_files": surf.get("precious_files"),
         "is_bare": bool(surf.get("is_bare")), "error": surf.get("error"),
         "last_commit": surf.get("last_commit"),
     }
@@ -321,6 +323,7 @@ def _build_one(members, lineages):
             "machine": e["machine"], "path": e["path"],
             "dirty": e["dirty"], "unpushed": e["unpushed"],
             "stashes": e.get("stashes"), "untracked": e.get("untracked"),
+            "precious_files": e.get("precious_files"),
             "is_bare": e["is_bare"], "error": e["error"],
             "last_commit": e["last_commit"],
             # How far the worst-off copy trails, so the collapsed row can say

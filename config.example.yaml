@@ -16,6 +16,20 @@ authors:
   - your-name
   - you@example.com
 
+# Declared precious paths -- alarmed on if git is IGNORING them (not merely
+# leaving them untracked). A pattern with no "/" matches a filename at any
+# depth (like a slash-less .gitignore rule); one with a "/" is anchored to
+# the repo root. This is a declared list, not a heuristic, on purpose: a
+# regenerable __pycache__ and an irreplaceable OAuth token both look like
+# "ignored" to git, and only you know which is which. Override per-target
+# below if a machine needs its own list instead of (or in addition to) this
+# global one.
+precious_patterns:
+  - credentials.json
+  - token.json
+  - "*.env"
+  - secrets/*
+
 # SSH defaults applied to every remote target (override per-target if needed).
 remote_python: python3         # interpreter name on the remote host
 connect_timeout: 8             # seconds before a host is treated as offline

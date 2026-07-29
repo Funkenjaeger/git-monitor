@@ -173,6 +173,7 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
         "stashes": None,
         "untracked": None,
         "precious_files": None,
+        "worktrees": None,
         "has_remote": None,
         "last_commit": None,
         "commit_days": {},
@@ -236,6 +237,18 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
                     if _matches_precious(rel, precious_patterns):
                         hits.append(rel)
                 info["precious_files"] = hits
+        # Linked worktrees: `git worktree list` enumerates every checkout
+        # sharing this repo's object store, including this one. A worktree
+        # with real uncommitted work would otherwise just be another
+        # unlabeled directory to the walk in find_repos() (or invisible to
+        # it entirely, if pruned by hand and left as an empty directory).
+        # First entry is always this checkout itself, so subtract one.
+        ok, out = run_git(["worktree", "list", "--porcelain"], cwd, gd)
+        if ok:
+            info["worktrees"] = max(
+                sum(1 for ln in out.splitlines() if ln.startswith("worktree ")) - 1,
+                0,
+            )
         # ahead/behind vs upstream; guarded — many repos have no upstream.
         ok, out = run_git(
             ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd, gd

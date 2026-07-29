@@ -196,9 +196,10 @@ GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 
 def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
-                    stashes=None, untracked=None, precious_files=None):
-    """The dirty / unpushed / stash / untracked / precious / unreadable / bare
-    chips for one instance."""
+                    stashes=None, untracked=None, precious_files=None,
+                    worktrees=None):
+    """The dirty / unpushed / stash / untracked / precious / worktree /
+    unreadable / bare chips for one instance."""
     b = []
     if error:
         b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
@@ -220,6 +221,11 @@ def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
         # has no backup at all", so it gets the alarm color, not the warn one.
         b.append('<span class="badge precious" title="%s">&#9888; %d precious</span>'
                  % (esc(", ".join(precious_files)), len(precious_files)))
+    if (worktrees or 0) > 0:
+        # A linked worktree can carry its own uncommitted/unpushed work that
+        # none of the checks above will ever see from this checkout's side.
+        b.append('<span class="badge worktree">%d worktree%s</span>'
+                 % (worktrees, "" if worktrees == 1 else "s"))
     if (unpushed or 0) > 0:
         b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
     if is_bare:
@@ -255,7 +261,8 @@ def _instance_row(pid, bid, e, level):
              + _status_badges(e["dirty"], e["unpushed"], e["error"],
                               e["is_bare"], clean_ok=False,
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious_files=e.get("precious_files"))
+                              precious_files=e.get("precious_files"),
+                              worktrees=e.get("worktrees"))
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
     return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
             '<span class="tleft">%s</span><span class="tright">%s</span></div>'
@@ -272,7 +279,8 @@ def _branch_row(pid, bid, br, level):
         toggle = GAP
         summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious_files=e.get("precious_files"))
+                              precious_files=e.get("precious_files"),
+                              worktrees=e.get("worktrees"))
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
         machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
         attrs = 'data-leaf="1"'
@@ -349,7 +357,8 @@ def render_projects(projects):
                  + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
                                   clean_ok=not sync,
                                   stashes=s.get("stashes"), untracked=s.get("untracked"),
-                                  precious_files=s.get("precious_files"))
+                                  precious_files=s.get("precious_files"),
+                                  worktrees=s.get("worktrees"))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(
@@ -508,6 +517,7 @@ button:disabled{opacity:.6;cursor:default;}
 .badge.untracked{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.stash{background:rgba(163,113,247,.18);color:#a371f7;}
 .badge.precious{background:rgba(248,81,73,.15);color:var(--alert);}
+.badge.worktree{background:rgba(163,113,247,.12);color:#a371f7;}
 .badge.unpushed{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}

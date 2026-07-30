@@ -173,6 +173,26 @@ def validate_config(cfg):
         for r in roots:
             if not isinstance(r, dict) or not r.get("path"):
                 raise ValueError("target %s: each root needs a `path`" % name)
+        # Declared backup coverage for precious files (see coverage.py). Absent
+        # means "unknown"; an empty list means "nothing here is backed up" and
+        # is a legitimate declaration, so only the shape is checked.
+        cov = t.get("precious_coverage")
+        if cov is not None:
+            if not isinstance(cov, list):
+                raise ValueError(
+                    "target %s: `precious_coverage` must be a list (omit it "
+                    "entirely for 'unknown', or use [] for 'nothing here is "
+                    "backed up')" % name)
+            for c in cov:
+                if isinstance(c, dict):
+                    if not c.get("path"):
+                        raise ValueError(
+                            "target %s: each precious_coverage entry needs a "
+                            "`path`" % name)
+                elif not isinstance(c, str) or not c.strip():
+                    raise ValueError(
+                        "target %s: precious_coverage entries must be a path "
+                        "string or a {path, by} mapping" % name)
         if not roots and not t.get("extra"):
             raise ValueError("target %s: needs at least one root or extra path" % name)
     return True

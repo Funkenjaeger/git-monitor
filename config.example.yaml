@@ -30,6 +30,19 @@ precious_patterns:
   - "*.env"
   - secrets/*
 
+# Being gitignored is only half the question -- the other half is whether
+# anything ELSE holds a copy. Declare per target (below) which paths some other
+# tool backs up, and a precious file is classified:
+#
+#   covered   under a declared path            muted chip, informational
+#   orphaned  target declares coverage, file   ALARM: only copy is on that disk
+#             falls outside all of it
+#   unknown   target declares no coverage      warn -- honest, not alarming
+#
+# Omitting `precious_coverage` for a target means "unknown". An EMPTY list is a
+# real declaration -- "nothing on this machine is backed up" -- and yields
+# orphaned, which is what you want for a laptop or a Pi with no backup.
+
 # SSH defaults applied to every remote target (override per-target if needed).
 remote_python: python3         # interpreter name on the remote host
 connect_timeout: 8             # seconds before a host is treated as offline
@@ -46,6 +59,13 @@ targets:
     roots:
       - { path: /mnt/git, depth: 2, bare: true }
       - { path: /home/user, depth: 2 }
+    # Paths some other tool holds a copy of. Write them as the SCAN sees them:
+    # for a local target that means container paths, which need not match the
+    # backup tool's own view of the same directory (a Duplicati source of
+    # /source/home/user/projects is /home/user/projects here).
+    precious_coverage:
+      - { path: /home/user/projects, by: 'duplicati "misc" job' }
+      - { path: /mnt/git, by: 'duplicati "misc" job' }
 
   # A Windows machine with native OpenSSH Server. Note remote_python: python
   # (Windows has no `python3`), and Windows-style paths.
@@ -54,6 +74,10 @@ targets:
     remote_python: python
     roots:
       - { path: C:/projects, depth: 2 }
+    # Declared empty, not omitted: this machine has no backup, so anything
+    # precious here really is orphaned. Pushing to GitHub does not count --
+    # a gitignored file is precisely what a push cannot carry.
+    precious_coverage: []
     # extra:   [ "D:/oneoff/some-repo" ]     # explicit repos outside the roots
     # exclude: [ "C:/projects/huge-vendored" ]
 

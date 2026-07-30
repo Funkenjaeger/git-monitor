@@ -129,12 +129,14 @@ def render_heatmap(commit_days):
     return "".join(parts), total
 
 
+MTOTALS = {"repos": 0, "dirty": 0, "unpushed": 0, "stashes": 0,
+           "untracked": 0, "orphaned": 0, "pmaybe": 0}
+
+
 def _machine_totals(repos):
     agg = {}
     for r in repos:
-        a = agg.setdefault(r["machine"],
-                            {"repos": 0, "dirty": 0, "unpushed": 0,
-                             "stashes": 0, "untracked": 0, "precious": 0})
+        a = agg.setdefault(r["machine"], dict(MTOTALS))
         a["repos"] += 1
         if (r["dirty"] or 0) > 0:
             a["dirty"] += 1
@@ -144,8 +146,13 @@ def _machine_totals(repos):
             a["stashes"] += 1
         if (r["untracked"] or 0) > 0:
             a["untracked"] += 1
-        if r.get("precious_files"):
-            a["precious"] += 1
+        # Per-machine we count FILES, not repos, for the precious buckets: a
+        # machine card is where you'd go to ask "how much is at risk here", and
+        # one repo holding two orphaned secrets is worse than one holding one.
+        # Covered files are deliberately absent -- the card is a problem
+        # summary, and "4 precious, all backed up" is not a problem.
+        a["orphaned"] += len(r.get("precious_orphaned") or [])
+        a["pmaybe"] += len(r.get("precious_unknown") or [])
     return agg
 
 
@@ -155,15 +162,16 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     totals = _machine_totals(repos)
     cards = []
     for m in machines:
-        t = totals.get(m["name"], {"repos": 0, "dirty": 0, "unpushed": 0,
-                                    "stashes": 0, "untracked": 0, "precious": 0})
+        t = totals.get(m["name"], dict(MTOTALS))
         online = bool(m["reachable"])
         dot = "on" if online else "off"
         status = "online" if online else "offline"
         sub = ("%d repos · %d dirty · %d unpushed · %d stashed · %d untracked"
                % (t["repos"], t["dirty"], t["unpushed"], t["stashes"], t["untracked"]))
-        if t["precious"]:
-            sub += " · %d precious" % t["precious"]
+        if t["orphaned"]:
+            sub += " · %d orphaned" % t["orphaned"]
+        if t["pmaybe"]:
+            sub += " · %d precious?" % t["pmaybe"]
         seen = rel_time(m["last_scanned"])
         err = ""
         if not online and m["error"]:
@@ -195,8 +203,22 @@ CHEV = '<span class="chev">&#9656;</span>'   # ▸ rotates to ▾ when open
 GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 
+def _precious(e):
+    """The three backup-coverage buckets for one entry, as _status_badges wants
+    them. One accessor so the four call sites can't disagree."""
+    return {"covered": e.get("precious_covered"),
+            "orphaned": e.get("precious_orphaned"),
+            "unknown": e.get("precious_unknown")}
+
+
+def _plist(items):
+    """"a, b (by x)" for a tooltip."""
+    return ", ".join(
+        i["path"] + (" (%s)" % i["by"] if i.get("by") else "") for i in items)
+
+
 def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
-                    stashes=None, untracked=None, precious_files=None,
+                    stashes=None, untracked=None, precious=None,
                     worktrees=None, has_remote=None):
     """The dirty / unpushed / stash / untracked / precious / worktree /
     no-remote / unreadable / bare chips for one instance."""
@@ -214,13 +236,32 @@ def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
     if (stashes or 0) > 0:
         b.append('<span class="badge stash">%d stash%s</span>'
                  % (stashes, "" if stashes == 1 else "es"))
-    if precious_files:
-        # A declared-precious path is gitignored -- git will never track,
-        # diff, commit or push it, so this can't hide inside dirty/unpushed
-        # the way untracked does. It's the only badge that means "this file
-        # has no backup at all", so it gets the alarm color, not the warn one.
-        b.append('<span class="badge precious" title="%s">&#9888; %d precious</span>'
-                 % (esc(", ".join(precious_files)), len(precious_files)))
+    if precious:
+        # A declared-precious path is gitignored -- git will never track, diff,
+        # commit or push it, so unlike untracked it cannot hide inside
+        # dirty/unpushed. What it CAN'T tell you on its own is whether that
+        # matters, so the chips split by declared backup coverage
+        # (coverage.py). Only the orphaned one is alarm-coloured: it is the
+        # only one that means "this file exists in exactly one place", and the
+        # only one that can reach zero.
+        orphaned = precious.get("orphaned") or []
+        unknown = precious.get("unknown") or []
+        covered = precious.get("covered") or []
+        if orphaned:
+            b.append('<span class="badge orphaned" title="%s">&#9888; %d orphaned</span>'
+                     % (esc("gitignored and covered by no declared backup -- the only "
+                            "copy is on this disk: " + _plist(orphaned)),
+                        len(orphaned)))
+        if unknown:
+            b.append('<span class="badge pmaybe" title="%s">%d precious?</span>'
+                     % (esc("gitignored, and this target declares no precious_coverage "
+                            "-- backup status unknown: " + _plist(unknown)),
+                        len(unknown)))
+        if covered:
+            b.append('<span class="badge pcovered" title="%s">%d precious &#10003;</span>'
+                     % (esc("gitignored, but under a declared backup: "
+                            + _plist(covered)),
+                        len(covered)))
     if (worktrees or 0) > 0:
         # A linked worktree can carry its own uncommitted/unpushed work that
         # none of the checks above will ever see from this checkout's side.
@@ -268,7 +309,7 @@ def _instance_row(pid, bid, e, level):
              + _status_badges(e["dirty"], e["unpushed"], e["error"],
                               e["is_bare"], clean_ok=False,
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious_files=e.get("precious_files"),
+                              precious=_precious(e),
                               worktrees=e.get("worktrees"),
                               has_remote=e.get("has_remote"))
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
@@ -287,7 +328,7 @@ def _branch_row(pid, bid, br, level):
         toggle = GAP
         summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
                               stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious_files=e.get("precious_files"),
+                              precious=_precious(e),
                               worktrees=e.get("worktrees"),
                               has_remote=e.get("has_remote"))
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
@@ -366,7 +407,7 @@ def render_projects(projects):
                  + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
                                   clean_ok=not sync,
                                   stashes=s.get("stashes"), untracked=s.get("untracked"),
-                                  precious_files=s.get("precious_files"),
+                                  precious=_precious(s),
                                   worktrees=s.get("worktrees"),
                                   has_remote=s.get("has_remote"))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
@@ -425,11 +466,21 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         stat("with stashes", summary["stash_repos"], "warn" if summary["stash_repos"] else "",
              title="repos with entries on refs/stash -- invisible to every other check here"),
         stat("with untracked", summary["untracked_repos"], "warn" if summary["untracked_repos"] else ""),
-        stat("precious at risk", summary["precious_files_total"],
-             "alert" if summary["precious_files_total"] else "",
-             title="declared-precious files (see config precious_patterns) that git "
-                   "is ignoring -- across %d repo(s); ignored means never committed, "
-                   "diffed or pushed, by design or by accident" % summary["precious_repos"]),
+        # Only the ORPHANED count gets the headline. "precious at risk" used to
+        # show every gitignored declared-precious file, so four correctly
+        # ignored-and-backed-up ones held it permanently red and camouflaged the
+        # one that had no copy anywhere. A number that can never reach zero
+        # carries as little information as one that never leaves it.
+        stat("precious orphaned", summary["precious_orphaned_files"],
+             "alert" if summary["precious_orphaned_files"] else "",
+             title="declared-precious files (config precious_patterns) that git ignores "
+                   "AND no declared backup covers, across %d repo(s) -- the only copy "
+                   "is on that disk. Also gitignored: %d under a declared backup "
+                   "(fine), %d on targets with no precious_coverage declared (unknown). "
+                   "See coverage.py."
+                   % (summary["precious_orphaned_repos"],
+                      summary["precious_covered_files"],
+                      summary["precious_unknown_files"])),
         stat("offline machines", summary["offline_machines"], "warn" if summary["offline_machines"] else ""),
     ])
 
@@ -526,7 +577,9 @@ button:disabled{opacity:.6;cursor:default;}
 .badge.dirty{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.untracked{background:rgba(210,153,34,.15);color:var(--warn);}
 .badge.stash{background:rgba(163,113,247,.18);color:#a371f7;}
-.badge.precious{background:rgba(248,81,73,.15);color:var(--alert);}
+.badge.orphaned{background:rgba(248,81,73,.15);color:var(--alert);}
+.badge.pmaybe{background:rgba(210,153,34,.15);color:var(--warn);}
+.badge.pcovered{background:#21262d;color:var(--muted);}
 .badge.worktree{background:rgba(163,113,247,.12);color:#a371f7;}
 .badge.unpushed{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.behind{background:rgba(88,166,255,.15);color:#58a6ff;}
@@ -728,7 +781,10 @@ details{margin-top:8px;} summary{cursor:pointer;color:var(--muted);font-size:13p
   <a class="back" href="/">&larr; back to dashboard</a>
 </header>
 <p class="hint">Add or remove monitored machines. Saving regenerates the config and triggers a
-background rescan. Changes affect which hosts are scanned over SSH (access is limited to your LAN/Tailscale).</p>
+background rescan. Changes affect which hosts are scanned over SSH (access is limited to your LAN/Tailscale).
+Settings with no widget here &mdash; <code>precious_patterns</code>, <code>precious_coverage</code>,
+per-target <code>authors</code>, <code>ssh_identity</code> &mdash; are carried through this form untouched;
+edit them in the raw YAML below.</p>
 
 <div class="card">
   <h2>Global settings</h2>
@@ -814,10 +870,24 @@ function makeCard(t){
   (t.roots||[]).forEach(function(r){rc.appendChild(makeRoot(r));});
   c.querySelector('.f-extra').value=(t.extra||[]).join('\\n');
   c.querySelector('.f-exclude').value=(t.exclude||[]).join('\\n');
+  // Keep the original target so collectTarget can carry through keys this form
+  // has no widget for.
+  c._orig=t;
   return c;
 }
+// The per-target keys this form actually owns. collectTarget used to build each
+// target from {}, which silently DELETED every other per-target key on save --
+// precious_patterns, precious_coverage, authors, ssh_identity, ssh_options --
+// so a hand-edited setting survived only until the next click of Save, with no
+// error and nothing on the page to show it had gone. collectConfig already did
+// this for unknown GLOBAL keys; targets were the gap.
+var FORM_KEYS=['name','ssh','remote_python','timeout','roots','extra','exclude'];
 function collectTarget(c){
   var t={name:v(c,'.f-name'),ssh:v(c,'.f-ssh')};
+  var orig=c._orig||{};
+  for(var k in orig){
+    if(orig.hasOwnProperty(k)&&FORM_KEYS.indexOf(k)<0&&!(k in t))t[k]=orig[k];
+  }
   var rpy=v(c,'.f-rpy');if(rpy)t.remote_python=rpy;
   var to=v(c,'.f-timeout');if(to)t.timeout=parseInt(to,10);
   var roots=[];

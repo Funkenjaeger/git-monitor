@@ -200,7 +200,10 @@ def get_machines(conn):
         "SELECT * FROM machines ORDER BY name").fetchall()]
 
 
-def get_repos(conn):
+def get_repos(conn, config=None):
+    """Repo rows. Pass `config` to have declared-precious files classified into
+    covered / orphaned / unknown -- that classification is a fact about the
+    host's backup arrangement, which lives in the config and not in the DB."""
     rows = []
     for r in conn.execute("SELECT * FROM repos ORDER BY last_commit DESC"):
         d = dict(r)
@@ -221,6 +224,9 @@ def get_repos(conn):
             except (ValueError, TypeError):
                 d["precious_files"] = None
         rows.append(d)
+    if config is not None:
+        import coverage
+        coverage.annotate(rows, config)
     return rows
 
 
@@ -233,9 +239,9 @@ def get_lineages(conn):
     return out
 
 
-def get_projects(conn):
+def get_projects(conn, config=None):
     import projects
-    return projects.build_projects(get_repos(conn), get_lineages(conn))
+    return projects.build_projects(get_repos(conn, config), get_lineages(conn))
 
 
 def get_root_warnings(conn):
@@ -272,8 +278,8 @@ def get_commit_days(conn):
     return {r["day"]: r["c"] for r in rows}
 
 
-def get_summary(conn):
-    repos = get_repos(conn)
+def get_summary(conn, config=None):
+    repos = get_repos(conn, config)
     machines = get_machines(conn)
     dirty_repos = sum(1 for r in repos if (r["dirty"] or 0) > 0)
     unpushed_repos = sum(1 for r in repos if (r["unpushed"] or 0) > 0)
@@ -282,6 +288,15 @@ def get_summary(conn):
     untracked_repos = sum(1 for r in repos if (r["untracked"] or 0) > 0)
     precious_repos = sum(1 for r in repos if r.get("precious_files"))
     precious_files_total = sum(len(r.get("precious_files") or []) for r in repos)
+    # Split by backup coverage (see coverage.py). The headline number is the
+    # ORPHANED count -- the only one that can reach zero, and so the only one
+    # worth putting an alarm colour on. Covered/unknown stay available for the
+    # tooltip and for /api/summary consumers. All three are 0 when no config was
+    # passed, in which case precious_files_total is still the honest total.
+    n_orphaned = sum(len(r.get("precious_orphaned") or []) for r in repos)
+    n_covered = sum(len(r.get("precious_covered") or []) for r in repos)
+    n_unknown = sum(len(r.get("precious_unknown") or []) for r in repos)
+    orphaned_repos = sum(1 for r in repos if r.get("precious_orphaned"))
     offline = sum(1 for m in machines if not m["reachable"])
     return {
         "total_repos": len(repos),
@@ -291,6 +306,10 @@ def get_summary(conn):
         "untracked_repos": untracked_repos,
         "precious_repos": precious_repos,
         "precious_files_total": precious_files_total,
+        "precious_orphaned_files": n_orphaned,
+        "precious_orphaned_repos": orphaned_repos,
+        "precious_covered_files": n_covered,
+        "precious_unknown_files": n_unknown,
         "unpushed_commits": unpushed_commits,
         "machines": len(machines),
         "offline_machines": offline,

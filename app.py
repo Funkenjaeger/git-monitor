@@ -71,21 +71,32 @@ def scheduler_loop():
         time.sleep(max(60, interval * 60))
 
 
+def _config_or_empty():
+    """Config for the read side. Backup coverage for precious files is declared
+    there (see coverage.py), so a page render needs it -- but an unparseable
+    config must degrade to "coverage unknown", not to a blank dashboard."""
+    try:
+        return collector.load_config(CONFIG_PATH)
+    except Exception:
+        return {}
+
+
 @app.route("/")
 def index():
+    cfg = _config_or_empty()
     conn = get_conn()
     try:
-        summary = storage.get_summary(conn)
+        summary = storage.get_summary(conn, cfg)
         machines = storage.get_machines(conn)
-        repos = storage.get_repos(conn)
+        repos = storage.get_repos(conn, cfg)
         commit_days = storage.get_commit_days(conn)
         root_warnings = storage.get_root_warnings(conn)
         repo_errors = storage.get_repo_errors(conn)
-        project_tree = storage.get_projects(conn)
+        project_tree = storage.get_projects(conn, cfg)
     finally:
         conn.close()
     try:
-        top_n = int(collector.load_config(CONFIG_PATH).get("top_n", 12))
+        top_n = int(cfg.get("top_n", 12))
     except Exception:
         top_n = 12
     return render_page(summary, machines, repos, commit_days,
@@ -96,25 +107,27 @@ def index():
 
 @app.route("/api/summary")
 def api_summary():
+    cfg = _config_or_empty()
     conn = get_conn()
     try:
-        return jsonify(storage.get_summary(conn))
+        return jsonify(storage.get_summary(conn, cfg))
     finally:
         conn.close()
 
 
 @app.route("/api/data")
 def api_data():
+    cfg = _config_or_empty()
     conn = get_conn()
     try:
         return jsonify({
-            "summary": storage.get_summary(conn),
+            "summary": storage.get_summary(conn, cfg),
             "machines": storage.get_machines(conn),
-            "repos": storage.get_repos(conn),
+            "repos": storage.get_repos(conn, cfg),
             "commit_days": storage.get_commit_days(conn),
             "root_warnings": storage.get_root_warnings(conn),
             "repo_errors": storage.get_repo_errors(conn),
-            "projects": storage.get_projects(conn),
+            "projects": storage.get_projects(conn, cfg),
             "last_scan": _last_scan,
         })
     finally:

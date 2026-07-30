@@ -23,9 +23,22 @@ with no fetch and no network -- so it works even for a machine that can't reach
 the remote.
 """
 
+import coverage
+
 # Matches scan.py's LINEAGE_DEPTH: past this we can't tell "far behind" from a
 # genuine fork, so we say "far" rather than invent a number.
 LINEAGE_DEPTH = 80
+
+
+def _carry(dst, src):
+    """Forward the per-repo fields this module only passes through to the
+    renderer. Iterating coverage.FIELDS rather than naming the keys three times
+    is deliberate: the surfaced-row dict below already fell out of sync with the
+    instance-row dict once over `precious_files`, and a field missing here reads
+    on the page as "this repo is fine"."""
+    for f in coverage.FIELDS:
+        dst[f] = src.get(f)
+    return dst
 
 
 def _norm_name(name):
@@ -251,7 +264,7 @@ def _build_one(members, lineages):
                     state = "far"
             if state in ("behind", "far"):
                 stale += 1
-            entries.append({
+            entries.append(_carry({
                 "machine": m["machine"], "path": m["path"],
                 "is_bare": bool(m.get("is_bare")), "dirty": m.get("dirty"),
                 "unpushed": m.get("unpushed"), "error": m.get("error"),
@@ -260,7 +273,7 @@ def _build_one(members, lineages):
                 "worktrees": m.get("worktrees"),
                 "last_commit": dates(m).get(b) or m.get("last_commit"),
                 "branch": b, "state": state, "count": count,
-            })
+            }, m))
         entries.sort(key=lambda e: (e["state"] != "leader", _neg(e["last_commit"])))
         candidates.append({
             "name": b,
@@ -299,7 +312,7 @@ def _build_one(members, lineages):
     # Surface the most recently touched working copy (fall back to any copy).
     pool = [m for m in members if working(m)] or members
     surf = max(pool, key=lambda m: (m.get("last_commit") or ""))
-    surfaced = {
+    surfaced = _carry({
         "branch": surf.get("branch"),
         "machine": surf.get("machine"), "path": surf.get("path"),
         "dirty": surf.get("dirty"), "unpushed": surf.get("unpushed"),
@@ -308,7 +321,7 @@ def _build_one(members, lineages):
         "worktrees": surf.get("worktrees"),
         "is_bare": bool(surf.get("is_bare")), "error": surf.get("error"),
         "last_commit": surf.get("last_commit"),
-    }
+    }, surf)
     # ...unless the copies disagree somewhere. Then show the branch they
     # disagree on, from the copy that's furthest ahead. A collapsed row is
     # triage: it should point at what needs attention, not at whatever was
@@ -320,7 +333,7 @@ def _build_one(members, lineages):
                  problem["entries"][0])
         lags = [x["count"] for x in problem["entries"]
                 if x["state"] == "behind" and x["count"]]
-        surfaced = {
+        surfaced = _carry({
             "branch": problem["name"],
             "machine": e["machine"], "path": e["path"],
             "dirty": e["dirty"], "unpushed": e["unpushed"],
@@ -332,7 +345,7 @@ def _build_one(members, lineages):
             # How far the worst-off copy trails, so the collapsed row can say
             # what's wrong instead of reporting the leader as "clean".
             "lag": max(lags) if lags else None,
-        }
+        }, e)
     # Prefer the repo name from a hosting origin -- it's stable and canonical,
     # so a checkout that happens to sit in a differently-named directory (cncpc's
     # ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.

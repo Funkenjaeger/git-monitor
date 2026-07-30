@@ -325,6 +325,17 @@ def save_config_dict(path, cfg):
     ry = YAML()                     # round-trip mode is the default
     ry.preserve_quotes = True
     ry.width = 4096                 # never re-wrap a long line into a new one
+    # Match how this file is written by hand. ruamel's default emits block
+    # sequences flush with their parent key, which reformats every `roots:` and
+    # `precious_coverage:` list in the file on the first save -- no data lost, but
+    # a diff full of noise in a file whose whole value is being readable.
+    ry.indent(mapping=2, sequence=4, offset=2)
+    # Residual, accepted: ruamel normalizes the spacing INSIDE flow mappings, so
+    # `- { path: /mnt/git, depth: 2 }` comes back as `- {path: /mnt/git, depth: 2}`
+    # and hand-aligned padding between entries is lost. There is no emitter option
+    # for it. Indentation, ordering, quoting and every comment survive, which is
+    # what actually matters -- but a first save after this change will show a
+    # whitespace-only diff on any flow-style line.
 
     if original.strip():
         doc = ry.load(original)

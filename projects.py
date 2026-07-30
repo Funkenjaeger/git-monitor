@@ -397,6 +397,14 @@ def _build_one(members, lineages):
         "host_label": host_label,
         "host_unpushed": host_unpushed,
         "last_commit": max((m.get("last_commit") or "") for m in members),
+        # A copy that would not read is the one thing a collapsed row must not
+        # hide. The surfaced copy is the most recently touched one, which can be
+        # perfectly clean while a sibling mirror is unreadable -- that is how a
+        # machine card reading "1 repo unreadable" ended up with no matching chip
+        # anywhere in the project list.
+        "errors": [{"machine": m["machine"], "path": m["path"],
+                    "error": m["error"]}
+                   for m in members if m.get("error")],
         "surfaced": surfaced,
         "branches": branches,
     }

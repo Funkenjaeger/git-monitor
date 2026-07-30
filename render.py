@@ -403,6 +403,16 @@ def render_projects(projects):
             sync = ('<span class="badge behind">%d behind</span>' % s["lag"]
                     if s.get("lag") else
                     '<span class="badge behind">out of sync</span>')
+        # Same reasoning for a copy that wouldn't read. _status_badges only sees
+        # the surfaced copy, so an unreadable sibling was visible on the machine
+        # card and nowhere in the list until you expanded the row it hid under.
+        bad = [e for e in p.get("errors") or [] if e["path"] != s["path"]
+               or e["machine"] != s["machine"]]
+        if bad:
+            sync += ('<span class="badge err" title="%s">&#9888; %d cop%s unreadable</span>'
+                     % (esc("; ".join("%s:%s: %s" % (e["machine"], e["path"], e["error"])
+                                      for e in bad[:4])),
+                        len(bad), "y" if len(bad) == 1 else "ies"))
         right = (meta + sync
                  + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
                                   clean_ok=not sync,

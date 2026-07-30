@@ -168,11 +168,16 @@ def api_config_get():
 @app.route("/api/config", methods=["POST"])
 def api_config_post():
     body = request.get_json(force=True, silent=True) or {}
+    warning = None
     try:
         if "raw" in body:
             collector.save_config_raw(CONFIG_PATH, body["raw"])
         elif "config" in body:
-            collector.save_config_dict(CONFIG_PATH, body["config"])
+            # Returns a note when a legitimate edit still cost comment lines
+            # (a removed target takes its own comments with it). Surfaced rather
+            # than dropped -- a save that quietly loses documentation is the bug
+            # this path was written to fix.
+            warning = collector.save_config_dict(CONFIG_PATH, body["config"])
         else:
             return jsonify({"ok": False, "error": "no 'config' or 'raw' in request"}), 400
     except Exception as exc:
@@ -184,7 +189,7 @@ def api_config_post():
         except Exception as exc:  # never surface a background failure as noise
             app.logger.warning("post-save scan failed: %s", exc)
     threading.Thread(target=_bg_rescan, name="gitmon-postsave", daemon=True).start()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "warning": warning} if warning else {"ok": True})
 
 
 @app.route("/api/config/test", methods=["POST"])

@@ -205,11 +205,164 @@ def _atomic_write(path, text):
     os.replace(tmp, path)
 
 
+def _count_comment_lines(text):
+    """Lines that are purely a comment. A crude metric on purpose: it is used
+    only to detect that comments went MISSING, and for that a lower bound on a
+    simple count is enough."""
+    return sum(1 for ln in text.splitlines() if ln.lstrip().startswith("#"))
+
+
+def _merge_value(cur, new):
+    """Merge `new` (plain data) into `cur` (a round-trip node) IN PLACE where the
+    shapes line up, and return what should be stored.
+
+    Assigning wholesale is what loses comments, and not only the obvious way. A
+    comment block sitting *inside* a mapping or sequence belongs to that node, so
+    `target["precious_coverage"] = [...]` replaces a CommentedSeq with a plain
+    list and takes the reasoning written above and inside it with it. That is how
+    48 of this config's 67 comment lines disappeared on the first attempt --
+    caught by the post-write check in save_config_dict, not by inspection.
+
+    The short-circuit on equality matters most: a form Save resubmits almost
+    everything unchanged, and an untouched node keeps its comments for free.
+    """
+    if cur == new:
+        return cur
+    if isinstance(cur, dict) and isinstance(new, dict):
+        for k, v in new.items():
+            cur[k] = _merge_value(cur[k], v) if k in cur else v
+        for k in [k for k in cur if k not in new]:
+            del cur[k]
+        return cur
+    if isinstance(cur, list) and isinstance(new, list):
+        # Trim from the tail: deleting by index shifts every later index, and
+        # ruamel tracks a sequence's comments BY INDEX.
+        for i in range(len(cur) - 1, len(new) - 1, -1):
+            del cur[i]
+        for i, v in enumerate(new):
+            if i < len(cur):
+                cur[i] = _merge_value(cur[i], v)
+            else:
+                cur.append(v)
+        return cur
+    return new
+
+
+def _merge_preserving_comments(doc, cfg):
+    """Update the round-trip document `doc` in place from plain dict `cfg`.
+
+    Targets are matched by NAME rather than position, so editing the third
+    machine cannot move the comments belonging to the first two.
+    """
+    for k, v in cfg.items():
+        if k != "targets":
+            doc[k] = _merge_value(doc[k], v) if k in doc else v
+    for k in [k for k in doc if k not in cfg]:
+        del doc[k]
+
+    wanted = cfg.get("targets", [])
+    old = doc.get("targets")
+    if old is None:
+        doc["targets"] = wanted
+        return
+
+    keep = [t.get("name") for t in wanted]
+    for i in range(len(old) - 1, -1, -1):
+        t = old[i]
+        if not isinstance(t, dict) or t.get("name") not in keep:
+            del old[i]
+    by_name = {t.get("name"): t for t in old if isinstance(t, dict)}
+    for spec in wanted:
+        cur = by_name.get(spec.get("name"))
+        if cur is None:
+            old.append(spec)          # appending cannot shift anyone else
+        else:
+            _merge_value(cur, spec)
+    # Only reorder if the order genuinely differs. The form has no reorder
+    # control -- cards are collected in DOM order, which is config order -- so
+    # this is a safety net, and sorting a CommentedSeq scrambles index-attached
+    # comments, which the post-write check will then refuse.
+    if [t.get("name") for t in old] != keep:
+        order = {n: i for i, n in enumerate(keep)}
+        old.sort(key=lambda t: order.get(t.get("name"), len(order)))
+
+
 def save_config_dict(path, cfg):
-    """Validate a config dict and write it as YAML (atomic)."""
+    """Validate a config dict and write it as YAML (atomic), keeping comments.
+
+    The /config form posts a whole config dict, and the old implementation ran
+    it through `yaml.safe_dump`, which regenerates the document and DROPS EVERY
+    COMMENT with no error. That was survivable when the file was mostly values;
+    it stopped being survivable once config.yaml started carrying the reasoning
+    behind `precious_coverage` and `precious_patterns` -- the values would
+    survive a Save and the explanation for them would not.
+
+    Returns a warning string (or None). The caller surfaces it rather than
+    swallowing it: this function refuses to write a document it can't verify,
+    but a *reduced* comment count after a legitimate target removal is expected
+    and only worth mentioning.
+    """
     import yaml
     validate_config(cfg)
-    _atomic_write(path, CONFIG_HEADER + yaml.safe_dump(cfg, sort_keys=False))
+
+    try:
+        from ruamel.yaml import YAML
+    except ImportError:
+        # Deliberately fatal rather than falling back to safe_dump. A silent
+        # fallback here would reintroduce exactly the data loss this exists to
+        # prevent, and the raw-YAML editor is a working alternative.
+        raise RuntimeError(
+            "ruamel.yaml is not installed, so saving from the form would strip "
+            "every comment from config.yaml. Install it (see requirements.txt) "
+            "or edit the raw YAML instead.")
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            original = fh.read()
+    except OSError:
+        original = ""
+
+    ry = YAML()                     # round-trip mode is the default
+    ry.preserve_quotes = True
+    ry.width = 4096                 # never re-wrap a long line into a new one
+
+    if original.strip():
+        doc = ry.load(original)
+        _merge_preserving_comments(doc, cfg)
+    else:
+        doc = cfg
+
+    import io
+    buf = io.StringIO()
+    ry.dump(doc, buf)
+    text = buf.getvalue()
+    if not original.strip():
+        text = CONFIG_HEADER + text
+
+    # Verify the result rather than trusting the round-trip. Two independent
+    # checks, because the failure modes are different: a merge bug changes the
+    # VALUES, and a ruamel-version quirk drops the COMMENTS.
+    reparsed = yaml.safe_load(text)
+    if reparsed != cfg:
+        raise RuntimeError(
+            "refusing to write: the round-trip result does not match the "
+            "submitted config. Nothing was changed on disk.")
+
+    before, after = _count_comment_lines(original), _count_comment_lines(text)
+    warning = None
+    if after < before:
+        old_names = {t.get("name") for t in (yaml.safe_load(original) or {}).get("targets") or []}
+        removed = old_names - {t.get("name") for t in cfg.get("targets") or []}
+        if not removed:
+            raise RuntimeError(
+                "refusing to write: %d comment line(s) would be lost and no "
+                "target was removed to explain it. Nothing was changed on disk; "
+                "use the raw YAML editor." % (before - after))
+        warning = ("%d comment line(s) went with the removed target(s): %s"
+                   % (before - after, ", ".join(sorted(n for n in removed if n))))
+
+    _atomic_write(path, text)
+    return warning
 
 
 def save_config_raw(path, text):

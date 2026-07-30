@@ -1,2 +1,7 @@
 flask>=3.0
 pyyaml>=6.0
+# Round-trip YAML, used only on the config-save path so that saving from the
+# /config form preserves the comments in config.yaml. pyyaml's safe_dump cannot:
+# it regenerates the document and drops every comment silently. See
+# collector.save_config_dict.
+ruamel.yaml>=0.18

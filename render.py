@@ -921,8 +921,12 @@ function post(body,onok,st){
   fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
    .then(function(r){return r.json();})
    .then(function(j){
-     if(j.ok){st.textContent='Saved. Rescanning in background — reloading…';st.className='savestatus ok';
-       setTimeout(function(){location.reload();},1400);}
+     if(j.ok){
+       st.textContent=j.warning ? ('Saved \\u2014 note: '+j.warning) : 'Saved. Rescanning in background — reloading…';
+       st.className='savestatus ok';
+       // Hold the page when there is something to read. Reloading after 1.4s
+       // would throw the note away before anyone saw it.
+       setTimeout(function(){location.reload();}, j.warning ? 8000 : 1400);}
      else{st.textContent='Error: '+j.error;st.className='savestatus err';}
    }).catch(function(e){st.textContent='Error: '+e;st.className='savestatus err';});
 }

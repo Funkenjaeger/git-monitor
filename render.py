@@ -508,7 +508,9 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
-.wrap{max-width:1000px;margin:0 auto;padding:24px 20px 20px;}
+/* Wide enough that the stat tiles and machine cards each stay on one line —
+   a wrapped row there costs ~110px of height, which the project list pays for. */
+.wrap{max-width:1440px;margin:0 auto;padding:24px 20px 20px;}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
 .headright{display:flex;align-items:center;gap:14px;}
 .cfglink{color:var(--muted);font-size:13px;text-decoration:none;border:1px solid var(--border);
@@ -532,7 +534,10 @@ button:disabled{opacity:.6;cursor:default;}
 .cardhead h2{font-size:14px;margin:0;font-weight:600;}
 .cardhead .note{color:var(--muted);font-size:12px;}
 .heatwrap{overflow-x:auto;}
-.heatmap{display:block;}
+/* Fixed-width SVG in a card wider than it — center it rather than stranding
+   all the slack on one side. Auto margins collapse to 0 when it overflows,
+   so the narrow-screen scroll still starts at the left edge. */
+.heatmap{display:block;margin:0 auto;}
 .heatmap text.mlabel,.heatmap text.wlabel,.heatmap text.legend{fill:var(--muted);font-size:10px;}
 .machines{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;}
 .mcard{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:#0d1117;}

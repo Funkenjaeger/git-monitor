@@ -258,15 +258,24 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
             if len(parts) == 2:
                 info["behind"] = int(parts[0])
                 info["ahead"] = int(parts[1])
-        # "unpushed": commits on HEAD not reachable from ANY remote branch.
-        # Works even when the current branch has no configured upstream, which
-        # is the exact case (a never-pushed feature branch) we care about.
+        # "unpushed": commits on ANY local branch not reachable from ANY remote.
+        #
+        # Scoped to HEAD until 2026-07-30, which under-reported badly: a repo
+        # whose current branch is pushed read as clean no matter how much sat on
+        # other branches. rotary-controller-f4 reported 0 while holding 14
+        # commits across add-emulator, automation-comparison and els-shoulder --
+        # and the whole point of this tool is that work on one disk is visible.
+        #
+        # `--branches HEAD` rather than bare `--branches`: --branches covers
+        # refs/heads only, so a detached HEAD (where commits are unreachable and
+        # will eventually be GC'd) would otherwise be missed entirely.
         ok, remotes = run_git(["remote"], cwd, gd)
         remote_names = remotes.split() if ok else []
         info["has_remote"] = bool(remote_names)
         if info["has_remote"]:
             ok, out = run_git(
-                ["rev-list", "--count", "HEAD", "--not", "--remotes"], cwd, gd
+                ["rev-list", "--count", "--branches", "HEAD", "--not", "--remotes"],
+                cwd, gd,
             )
             if ok and out.strip().isdigit():
                 info["unpushed"] = int(out.strip())
@@ -278,7 +287,8 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
             if ok and url.strip():
                 info["remotes"][rn] = url.strip().splitlines()[0]
             ok, out = run_git(
-                ["rev-list", "--count", "HEAD", "--not", "--remotes=" + rn], cwd, gd
+                ["rev-list", "--count", "--branches", "HEAD",
+                 "--not", "--remotes=" + rn], cwd, gd,
             )
             if ok and out.strip().isdigit():
                 info["unpushed_by_remote"][rn] = int(out.strip())

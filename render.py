@@ -379,7 +379,7 @@ def render_projects(projects):
 
 
 def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
-                root_warnings=None, repo_errors=None, projects=None):
+                root_warnings=None, repo_errors=None, projects=None, gated=False):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -429,6 +429,20 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
         "stats": stats,
         "year_total": str(year_total),
         "heatmap": heatmap_svg,
+        # Config and Refresh are control-plane actions, so they only work for a
+        # request that came through lanauth. The dashboard itself is deliberately
+        # authless, which means it can also be opened directly on :8083 -- and
+        # rendering buttons there that can only ever answer 403 teaches people
+        # the tool is broken. Show what will actually work.
+        "controls": (
+            '<a class="cfglink" href="/config" title="Edit monitored machines">'
+            '<i></i>Config</a>'
+            '<button id="refresh" onclick="refresh()">Refresh</button>'
+            if gated else
+            '<span class="sub" title="The config editor and manual refresh are '
+            'control-plane actions. Reach this dashboard through '
+            'gitmonitor.funkenjaeger.net to sign in and use them.">read-only view</span>'
+        ),
         "machines": render_machines(machines, repos, root_warnings, repo_errors),
         "repos": render_projects(projects or []),
         "scan_at": scan_at,
@@ -546,8 +560,7 @@ button:disabled{opacity:.6;cursor:default;}
   <div class="sub">uncommitted &amp; unpushed work across your machines</div></div>
   <div class="headright">
     <span class="sub">last scan {{scan_at}}</span>
-    <a class="cfglink" href="/config" title="Edit monitored machines"><i></i>Config</a>
-    <button id="refresh" onclick="refresh()">Refresh</button>
+    {{controls}}
   </div>
 </header>
 

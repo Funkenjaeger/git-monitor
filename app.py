@@ -10,11 +10,13 @@ Env:
     GITMON_PORT    listen port           (default 8083)
 """
 
+import functools
+import hmac
 import os
 import threading
 import time
 
-from flask import Flask, jsonify, redirect, request, url_for
+from flask import Flask, abort, jsonify, redirect, request, url_for
 
 import collector
 import storage
@@ -81,6 +83,57 @@ def _config_or_empty():
         return {}
 
 
+# The control plane -- the config editor, the config API and the scan triggers --
+# is reachable two ways, and only one of them is authenticated.
+#
+#   through lanauth:  Pocket ID login, then Caddy stamps GATE_HEADER
+#   direct:           http://192.168.1.211:8083, which any LAN host can reach
+#
+# Source IP cannot tell them apart: docker SNATs published-port traffic to the
+# bridge gateway, so a gated request and a direct one arrive from the same
+# address. The header is the only distinguishing signal. This mirrors houston,
+# which does exactly this with X-Houston-Gate.
+#
+# What is NOT gated is deliberate: the dashboard and the read APIs stay open.
+# Reading which repos have uncommitted work is low-risk and there is no
+# attribution to preserve. What can CHANGE something is what needs the gate --
+# /api/config rewrites the collector's ssh targets and remote_python, and
+# /api/config/test opens an SSH connection to a target supplied in the request
+# body.
+GATE_HEADER = "X-Gitmonitor-Gate"
+GATE_SECRET = os.environ.get("GITMON_GATE_SECRET", "")
+
+
+def through_gate():
+    """Did this request arrive through lanauth? Used to decide whether to render
+    control-plane affordances, not to authorise anything -- `gated` does that."""
+    return bool(GATE_SECRET) and hmac.compare_digest(
+        request.headers.get(GATE_HEADER, ""), GATE_SECRET)
+
+
+def gated(fn):
+    """Refuse a control-plane request that did not come through lanauth.
+
+    Fails CLOSED when no secret is configured. An unset secret means the gate
+    was never wired up, and the wrong response to that is not "let everyone in"
+    -- the same reasoning that put webedge on oauth2-proxy, which refuses to
+    start without an explicit allowlist, rather than tinyauth, whose policy
+    defaulted to allow.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not GATE_SECRET:
+            abort(503, "control plane disabled: GITMON_GATE_SECRET is not set. "
+                       "Set it in the compose env and give lanauth the same value.")
+        # compare_digest, not ==: a shared secret compared byte-by-byte leaks
+        # its prefix through timing.
+        if not hmac.compare_digest(request.headers.get(GATE_HEADER, ""), GATE_SECRET):
+            abort(403, "the control plane is reachable only through lanauth "
+                       "(https://gitmonitor.funkenjaeger.net)")
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 @app.route("/")
 def index():
     cfg = _config_or_empty()
@@ -102,7 +155,7 @@ def index():
     return render_page(summary, machines, repos, commit_days,
                        top_n=top_n, last_scan=_last_scan,
                        root_warnings=root_warnings, repo_errors=repo_errors,
-                       projects=project_tree)
+                       projects=project_tree, gated=through_gate())
 
 
 @app.route("/api/summary")
@@ -134,13 +187,18 @@ def api_data():
         conn.close()
 
 
-@app.route("/api/refresh", methods=["POST", "GET"])
+# POST only. This used to accept GET, which made a scan fire on a bare URL
+# fetch -- a link, a prefetch, a crawler. A control-plane route that answers
+# GET defeats any "protect the writes" approach.
+@app.route("/api/refresh", methods=["POST"])
+@gated
 def api_refresh():
     result = run_scan()
     return jsonify(result)
 
 
 @app.route("/refresh", methods=["POST"])
+@gated
 def refresh_and_redirect():
     run_scan()
     return redirect(url_for("index"))
@@ -155,17 +213,20 @@ def _read_config_text():
 
 
 @app.route("/config")
+@gated
 def config_page():
     return render_config_page(_read_config_text(), collector.load_config(CONFIG_PATH))
 
 
 @app.route("/api/config", methods=["GET"])
+@gated
 def api_config_get():
     return jsonify({"raw": _read_config_text(),
                     "config": collector.load_config(CONFIG_PATH)})
 
 
 @app.route("/api/config", methods=["POST"])
+@gated
 def api_config_post():
     body = request.get_json(force=True, silent=True) or {}
     warning = None
@@ -193,6 +254,7 @@ def api_config_post():
 
 
 @app.route("/api/config/test", methods=["POST"])
+@gated
 def api_config_test():
     body = request.get_json(force=True, silent=True) or {}
     target = body.get("target")

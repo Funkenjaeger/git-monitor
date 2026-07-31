@@ -85,6 +85,26 @@ def run_git(git_args, cwd=None, git_dir=None):
     return True, proc.stdout.decode("utf-8", "replace")
 
 
+# Every field probe_repo reports about one repo. Named here rather than written
+# out as a literal inside probe_repo so that tests can check each one against
+# the signal registry (signals.py): a detector added here but never registered
+# there produces a number nobody will ever see on the dashboard, and says
+# nothing about it -- the repo just renders "clean". This module deliberately
+# imports nothing from the rest of the app; it is shipped whole to each target
+# and run there under whatever python that host has.
+REPO_FIELDS = (
+    "path", "name", "is_bare", "branch",
+    "dirty", "ahead", "behind", "unpushed", "stashes", "untracked",
+    "precious_files", "worktrees", "has_remote", "error",
+    "last_commit", "commit_days",
+    "head_sha", "root_key", "branch_tips", "branch_dates", "lineage",
+    "remotes", "unpushed_by_remote",
+)
+#: Of those, the ones that default to an empty dict rather than None.
+DICT_FIELDS = ("commit_days", "branch_tips", "branch_dates", "lineage",
+               "remotes", "unpushed_by_remote")
+
+
 def norm(p):
     return os.path.normpath(p).replace("\\", "/")
 
@@ -161,31 +181,10 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
     gd = path if bare else None
     cwd = None if bare else path
 
-    info = {
-        "path": path,
-        "name": name,
-        "is_bare": bool(bare),
-        "branch": None,
-        "dirty": None,
-        "ahead": None,
-        "behind": None,
-        "unpushed": None,
-        "stashes": None,
-        "untracked": None,
-        "precious_files": None,
-        "worktrees": None,
-        "has_remote": None,
-        "last_commit": None,
-        "commit_days": {},
-        "error": None,
-        "head_sha": None,
-        "root_key": None,
-        "branch_tips": {},
-        "branch_dates": {},
-        "lineage": {},
-        "remotes": {},
-        "unpushed_by_remote": {},
-    }
+    info = {f: ({} if f in DICT_FIELDS else None) for f in REPO_FIELDS}
+    info["path"] = path
+    info["name"] = name
+    info["is_bare"] = bool(bare)
 
     ok, out = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd, gd)
     if ok:

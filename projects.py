@@ -23,22 +23,31 @@ with no fetch and no network -- so it works even for a machine that can't reach
 the remote.
 """
 
-import coverage
+import signals
 
 # Matches scan.py's LINEAGE_DEPTH: past this we can't tell "far behind" from a
 # genuine fork, so we say "far" rather than invent a number.
 LINEAGE_DEPTH = 80
 
+# What an instance dict needs on top of its signals: which copy this is, when it
+# last moved, and the raw precious list the coverage buckets are derived from.
+_IDENTITY = ("machine", "path", "name", "branch", "last_commit", "precious_files")
 
-def _carry(dst, src):
-    """Forward the per-repo fields this module only passes through to the
-    renderer. Iterating coverage.FIELDS rather than naming the keys three times
-    is deliberate: the surfaced-row dict below already fell out of sync with the
-    instance-row dict once over `precious_files`, and a field missing here reads
-    on the page as "this repo is fine"."""
-    for f in coverage.FIELDS:
-        dst[f] = src.get(f)
-    return dst
+
+def _view(m, **over):
+    """One copy of a project, in the shape the renderer wants.
+
+    Built by iterating signals.CARRY instead of listing field names. This
+    module builds three of these views -- an instance row, the surfaced copy,
+    and the surfaced copy again when the copies disagree -- and they drifted
+    apart twice: once over `precious_files`, once over `has_remote`, which was
+    absent from all three and so could never render at all. A signal missing
+    from a view does not show up blank on the page. It shows up as "clean".
+    """
+    v = {f: m.get(f) for f in _IDENTITY}
+    v.update({k: m.get(k) for k in signals.CARRY})
+    v.update(over)
+    return v
 
 
 def _norm_name(name):
@@ -264,16 +273,9 @@ def _build_one(members, lineages):
                     state = "far"
             if state in ("behind", "far"):
                 stale += 1
-            entries.append(_carry({
-                "machine": m["machine"], "path": m["path"],
-                "is_bare": bool(m.get("is_bare")), "dirty": m.get("dirty"),
-                "unpushed": m.get("unpushed"), "error": m.get("error"),
-                "stashes": m.get("stashes"), "untracked": m.get("untracked"),
-                "precious_files": m.get("precious_files"),
-                "worktrees": m.get("worktrees"),
-                "last_commit": dates(m).get(b) or m.get("last_commit"),
-                "branch": b, "state": state, "count": count,
-            }, m))
+            entries.append(_view(
+                m, branch=b, state=state, count=count,
+                last_commit=dates(m).get(b) or m.get("last_commit")))
         entries.sort(key=lambda e: (e["state"] != "leader", _neg(e["last_commit"])))
         candidates.append({
             "name": b,
@@ -312,16 +314,7 @@ def _build_one(members, lineages):
     # Surface the most recently touched working copy (fall back to any copy).
     pool = [m for m in members if working(m)] or members
     surf = max(pool, key=lambda m: (m.get("last_commit") or ""))
-    surfaced = _carry({
-        "branch": surf.get("branch"),
-        "machine": surf.get("machine"), "path": surf.get("path"),
-        "dirty": surf.get("dirty"), "unpushed": surf.get("unpushed"),
-        "stashes": surf.get("stashes"), "untracked": surf.get("untracked"),
-        "precious_files": surf.get("precious_files"),
-        "worktrees": surf.get("worktrees"),
-        "is_bare": bool(surf.get("is_bare")), "error": surf.get("error"),
-        "last_commit": surf.get("last_commit"),
-    }, surf)
+    surfaced = _view(surf)
     # ...unless the copies disagree somewhere. Then show the branch they
     # disagree on, from the copy that's furthest ahead. A collapsed row is
     # triage: it should point at what needs attention, not at whatever was
@@ -333,19 +326,11 @@ def _build_one(members, lineages):
                  problem["entries"][0])
         lags = [x["count"] for x in problem["entries"]
                 if x["state"] == "behind" and x["count"]]
-        surfaced = _carry({
-            "branch": problem["name"],
-            "machine": e["machine"], "path": e["path"],
-            "dirty": e["dirty"], "unpushed": e["unpushed"],
-            "stashes": e.get("stashes"), "untracked": e.get("untracked"),
-            "precious_files": e.get("precious_files"),
-            "worktrees": e.get("worktrees"),
-            "is_bare": e["is_bare"], "error": e["error"],
-            "last_commit": e["last_commit"],
+        surfaced = _view(
+            e, branch=problem["name"],
             # How far the worst-off copy trails, so the collapsed row can say
             # what's wrong instead of reporting the leader as "clean".
-            "lag": max(lags) if lags else None,
-        }, e)
+            lag=max(lags) if lags else None)
     # Prefer the repo name from a hosting origin -- it's stable and canonical,
     # so a checkout that happens to sit in a differently-named directory (cncpc's
     # ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.
@@ -397,14 +382,14 @@ def _build_one(members, lineages):
         "host_label": host_label,
         "host_unpushed": host_unpushed,
         "last_commit": max((m.get("last_commit") or "") for m in members),
-        # A copy that would not read is the one thing a collapsed row must not
-        # hide. The surfaced copy is the most recently touched one, which can be
-        # perfectly clean while a sibling mirror is unreadable -- that is how a
-        # machine card reading "1 repo unreadable" ended up with no matching chip
-        # anywhere in the project list.
-        "errors": [{"machine": m["machine"], "path": m["path"],
-                    "error": m["error"]}
-                   for m in members if m.get("error")],
+        # Everything true of a copy this row is NOT showing. A collapsed row
+        # displays one instance out of several -- the most recently touched one,
+        # which is routinely the healthy one -- so without this it reports a
+        # clean leader while the actual problem sits one level down, unopened.
+        # Registry-driven on purpose: each time this was patched per-signal
+        # (precious files, then an unreadable mirror) the next signal added
+        # arrived hidden all over again.
+        "hidden": signals.hidden_from(members, surfaced),
         "surfaced": surfaced,
         "branches": branches,
     }

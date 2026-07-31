@@ -5,9 +5,11 @@ is a plain SVG grid (GitHub-style); tooltips are native `title` elements. The
 only JavaScript is a tiny fetch for the Refresh button.
 """
 
-import html
 import json
 from datetime import date, datetime, timedelta, timezone
+
+import signals
+from signals import esc
 
 # GitHub-ish green scale on a dark card.
 LEVELS = ["#1b1f24", "#0e4429", "#006d32", "#26a641", "#39d353"]
@@ -26,10 +28,6 @@ def _level(count):
     if count <= 9:
         return 3
     return 4
-
-
-def esc(s):
-    return html.escape("" if s is None else str(s))
 
 
 def rel_time(iso):
@@ -129,31 +127,35 @@ def render_heatmap(commit_days):
     return "".join(parts), total
 
 
-MTOTALS = {"repos": 0, "dirty": 0, "unpushed": 0, "stashes": 0,
-           "untracked": 0, "orphaned": 0, "pmaybe": 0}
-
-
 def _machine_totals(repos):
+    """Per machine: repo count, plus one total per card-worthy signal.
+
+    Count-valued signals tally REPOS ("3 dirty" = three checkouts need
+    attention); list-valued ones tally ITEMS, because a machine card is where
+    you ask "how much is at risk here" and one repo holding two orphaned
+    secrets is worse than one holding one. Which is which comes from the
+    signal's own declaration (signals.card_unit), not from a branch here."""
     agg = {}
     for r in repos:
-        a = agg.setdefault(r["machine"], dict(MTOTALS))
+        a = agg.setdefault(r["machine"], {"repos": 0})
         a["repos"] += 1
-        if (r["dirty"] or 0) > 0:
-            a["dirty"] += 1
-        if (r["unpushed"] or 0) > 0:
-            a["unpushed"] += 1
-        if (r["stashes"] or 0) > 0:
-            a["stashes"] += 1
-        if (r["untracked"] or 0) > 0:
-            a["untracked"] += 1
-        # Per-machine we count FILES, not repos, for the precious buckets: a
-        # machine card is where you'd go to ask "how much is at risk here", and
-        # one repo holding two orphaned secrets is worse than one holding one.
-        # Covered files are deliberately absent -- the card is a problem
-        # summary, and "4 precious, all backed up" is not a problem.
-        a["orphaned"] += len(r.get("precious_orphaned") or [])
-        a["pmaybe"] += len(r.get("precious_unknown") or [])
+        for s in signals.ON_CARD:
+            a[s.key] = a.get(s.key, 0) + (
+                s.count(r) if s.card_unit == "items" else int(s.fires(r)))
     return agg
+
+
+def _machine_sub(t):
+    """The one-line summary under a machine's name. Signals marked card_always
+    print even at zero (they're the shape of the line people read at a glance);
+    the rest appear only when they fire, so registering a new signal can't pad
+    every card with a zero."""
+    parts = ["%d repos" % t["repos"]]
+    for s in signals.ON_CARD:
+        n = t.get(s.key, 0)
+        if n or s.card_always:
+            parts.append(s.card_text(n))
+    return " · ".join(parts)
 
 
 def render_machines(machines, repos, root_warnings=None, repo_errors=None):
@@ -162,16 +164,11 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     totals = _machine_totals(repos)
     cards = []
     for m in machines:
-        t = totals.get(m["name"], dict(MTOTALS))
+        t = totals.get(m["name"], {"repos": 0})
         online = bool(m["reachable"])
         dot = "on" if online else "off"
         status = "online" if online else "offline"
-        sub = ("%d repos · %d dirty · %d unpushed · %d stashed · %d untracked"
-               % (t["repos"], t["dirty"], t["unpushed"], t["stashes"], t["untracked"]))
-        if t["orphaned"]:
-            sub += " · %d orphaned" % t["orphaned"]
-        if t["pmaybe"]:
-            sub += " · %d precious?" % t["pmaybe"]
+        sub = _machine_sub(t)
         seen = rel_time(m["last_scanned"])
         err = ""
         if not online and m["error"]:
@@ -203,84 +200,27 @@ CHEV = '<span class="chev">&#9656;</span>'   # ▸ rotates to ▾ when open
 GAP = '<span class="chev gap"></span>'       # keeps leaf rows aligned
 
 
-def _precious(e):
-    """The three backup-coverage buckets for one entry, as _status_badges wants
-    them. One accessor so the four call sites can't disagree."""
-    return {"covered": e.get("precious_covered"),
-            "orphaned": e.get("precious_orphaned"),
-            "unknown": e.get("precious_unknown")}
+def _status_badges(e, clean_ok=True):
+    """Every registered signal firing on one instance, as chips.
 
-
-def _plist(items):
-    """"a, b (by x)" for a tooltip."""
-    return ", ".join(
-        i["path"] + (" (%s)" % i["by"] if i.get("by") else "") for i in items)
-
-
-def _status_badges(dirty, unpushed, error, is_bare=False, clean_ok=True,
-                    stashes=None, untracked=None, precious=None,
-                    worktrees=None, has_remote=None):
-    """The dirty / unpushed / stash / untracked / precious / worktree /
-    no-remote / unreadable / bare chips for one instance."""
-    b = []
-    if error:
-        b.append('<span class="badge err" title="%s">&#9888; unreadable</span>'
-                 % esc(error))
-    if (dirty or 0) > 0:
-        b.append('<span class="badge dirty">%d dirty</span>' % dirty)
-    if (untracked or 0) > 0:
-        # Already folded into "dirty" above (status --porcelain reports
-        # untracked files too) -- called out separately so "new work nobody
-        # `git add`ed yet" doesn't hide inside a generic dirty count.
-        b.append('<span class="badge untracked">%d untracked</span>' % untracked)
-    if (stashes or 0) > 0:
-        b.append('<span class="badge stash">%d stash%s</span>'
-                 % (stashes, "" if stashes == 1 else "es"))
-    if precious:
-        # A declared-precious path is gitignored -- git will never track, diff,
-        # commit or push it, so unlike untracked it cannot hide inside
-        # dirty/unpushed. What it CAN'T tell you on its own is whether that
-        # matters, so the chips split by declared backup coverage
-        # (coverage.py). Only the orphaned one is alarm-coloured: it is the
-        # only one that means "this file exists in exactly one place", and the
-        # only one that can reach zero.
-        orphaned = precious.get("orphaned") or []
-        unknown = precious.get("unknown") or []
-        covered = precious.get("covered") or []
-        if orphaned:
-            b.append('<span class="badge orphaned" title="%s">&#9888; %d orphaned</span>'
-                     % (esc("gitignored and covered by no declared backup -- the only "
-                            "copy is on this disk: " + _plist(orphaned)),
-                        len(orphaned)))
-        if unknown:
-            b.append('<span class="badge pmaybe" title="%s">%d precious?</span>'
-                     % (esc("gitignored, and this target declares no precious_coverage "
-                            "-- backup status unknown: " + _plist(unknown)),
-                        len(unknown)))
-        if covered:
-            b.append('<span class="badge pcovered" title="%s">%d precious &#10003;</span>'
-                     % (esc("gitignored, but under a declared backup: "
-                            + _plist(covered)),
-                        len(covered)))
-    if (worktrees or 0) > 0:
-        # A linked worktree can carry its own uncommitted/unpushed work that
-        # none of the checks above will ever see from this checkout's side.
-        b.append('<span class="badge worktree">%d worktree%s</span>'
-                 % (worktrees, "" if worktrees == 1 else "s"))
-    if (unpushed or 0) > 0:
-        b.append('<span class="badge unpushed">%d unpushed</span>' % unpushed)
-    if has_remote is not None and not has_remote and not is_bare:
-        # No remote at all: "unpushed" is structurally 0 here, because there is
-        # nowhere to push to -- so this repo reads as clean while being the one
-        # kind that has no off-machine copy of its history. Bare repos are
-        # excluded deliberately: /mnt/git IS the remote, so having none is
-        # correct there and flagging it would be noise on every repo.
-        b.append('<span class="badge noremote">no remote</span>')
-    if is_bare:
-        b.append('<span class="badge bare">bare</span>')
+    No per-signal code here on purpose: what a signal is called, what colour it
+    is and what its tooltip says are declared once in signals.py, so a chip
+    can't go missing from this list the way `no remote` and `worktrees` did."""
+    b = [s.chip(e) for s in signals.firing(e)]
     if not b and clean_ok:
         b.append('<span class="badge clean">clean</span>')
     return "".join(b)
+
+
+def _hidden_badges(p):
+    """What's true of the copies a collapsed project row is not showing.
+
+    Chips in the same order and colours as the instance chips, so the roll-up
+    reads as "and more of this, one level down" rather than a separate
+    vocabulary."""
+    hidden = p.get("hidden") or {}
+    return "".join(s.rollup_chip(hidden[s.key])
+                   for s in signals.SIGNALS if hidden.get(s.key))
 
 
 def _sync_badge(state, count):
@@ -306,12 +246,7 @@ def _instance_row(pid, bid, e, level):
             '<span class="tpath" title="%s">%s</span>'
             % (GAP, esc(e["machine"]), esc(loc), esc(e["path"])))
     right = (_sync_badge(e["state"], e["count"])
-             + _status_badges(e["dirty"], e["unpushed"], e["error"],
-                              e["is_bare"], clean_ok=False,
-                              stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious=_precious(e),
-                              worktrees=e.get("worktrees"),
-                              has_remote=e.get("has_remote"))
+             + _status_badges(e, clean_ok=False)
              + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
     return ('<div class="trow irow lvl%d" data-pid="%s" data-bid="%s" style="display:none">'
             '<span class="tleft">%s</span><span class="tright">%s</span></div>'
@@ -326,11 +261,7 @@ def _branch_row(pid, bid, br, level):
     if single:
         e = br["entries"][0]
         toggle = GAP
-        summ = (_status_badges(e["dirty"], e["unpushed"], e["error"], e["is_bare"],
-                              stashes=e.get("stashes"), untracked=e.get("untracked"),
-                              precious=_precious(e),
-                              worktrees=e.get("worktrees"),
-                              has_remote=e.get("has_remote"))
+        summ = (_status_badges(e)
                 + '<span class="ttime">%s</span>' % rel_time(e["last_commit"]))
         machine = '<span class="tmachine">%s</span>' % esc(e["machine"])
         attrs = 'data-leaf="1"'
@@ -403,23 +334,12 @@ def render_projects(projects):
             sync = ('<span class="badge behind">%d behind</span>' % s["lag"]
                     if s.get("lag") else
                     '<span class="badge behind">out of sync</span>')
-        # Same reasoning for a copy that wouldn't read. _status_badges only sees
-        # the surfaced copy, so an unreadable sibling was visible on the machine
-        # card and nowhere in the list until you expanded the row it hid under.
-        bad = [e for e in p.get("errors") or [] if e["path"] != s["path"]
-               or e["machine"] != s["machine"]]
-        if bad:
-            sync += ('<span class="badge err" title="%s">&#9888; %d cop%s unreadable</span>'
-                     % (esc("; ".join("%s:%s: %s" % (e["machine"], e["path"], e["error"])
-                                      for e in bad[:4])),
-                        len(bad), "y" if len(bad) == 1 else "ies"))
-        right = (meta + sync
-                 + _status_badges(s["dirty"], s["unpushed"], s["error"], s["is_bare"],
-                                  clean_ok=not sync,
-                                  stashes=s.get("stashes"), untracked=s.get("untracked"),
-                                  precious=_precious(s),
-                                  worktrees=s.get("worktrees"),
-                                  has_remote=s.get("has_remote"))
+        # And everything else the copies underneath report. A collapsed row
+        # shows one instance; anything true of the others has to be rolled up
+        # here or it is invisible until someone expands the very row hiding it.
+        elsewhere = _hidden_badges(p)
+        right = (meta + sync + elsewhere
+                 + _status_badges(s, clean_ok=not (sync or elsewhere))
                  + '<span class="ttime">%s</span>' % rel_time(s["last_commit"]))
         single = "1" if p["single_branch"] else ""
         rows.append(
@@ -603,6 +523,10 @@ button:disabled{opacity:.6;cursor:default;}
 .badge.diverged{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.bare,.badge.noremote{background:#21262d;color:var(--muted);}
 .badge.err{background:rgba(248,81,73,.22);color:var(--alert);}
+/* A roll-up chip: this is true of a copy the collapsed row isn't showing. Same
+   colour as the chip it stands for, dashed so it reads as a pointer rather
+   than a fact about the copy named on this row. */
+.badge.elsewhere{border:1px dashed currentColor;background:transparent;opacity:.85;}
 .more{color:var(--accent);font-size:12px;margin-top:10px;cursor:pointer;display:inline-block;user-select:none;}
 .more:hover{text-decoration:underline;}
 </style></head><body>

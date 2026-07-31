@@ -39,10 +39,10 @@ means "what some other tool does", and editing coverage takes effect on the next
 page load instead of the next scan.
 """
 
-# The keys added to every repo dict, so callers that need to forward them
-# (projects.py) have one list to iterate instead of three literals to keep in
-# sync -- the exact drift that left `precious_files` missing from a surfaced-row
-# dict once already.
+# The keys this module adds to every repo dict. These are the three signals with
+# no database column: they are classified here on the read side, so signals.py
+# declares them with `stored = None` and everything downstream treats them like
+# any other signal.
 FIELDS = ("precious_covered", "precious_orphaned", "precious_unknown")
 
 

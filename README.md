@@ -26,6 +26,13 @@ config.yaml ──► collector.py ──► scan.py (piped over SSH to each hos
 - **collector.py** — for each target runs scan.py locally (`ssh: local`) or via
   `ssh host <python> - <b64config> < scan.py`. Unreachable → offline, snapshot kept.
 - **storage.py** — sqlite. A successful scan replaces that machine's rows.
+- **signals.py** — the registry of everything the dashboard can say about a
+  repo (dirty, unpushed, stashes, untracked, precious files, worktrees, no
+  remote, unreadable, bare). Each is declared once and every other stage
+  iterates it: storage builds its columns and its INSERT from it, projects.py
+  carries it, render.py chips it and rolls it up onto a collapsed row. Adding a
+  signal means adding it here and nowhere else — read the module docstring
+  before adding one anywhere else.
 - **app.py / render.py** — dashboard (`/`), config editor (`/config`),
   `/api/summary`, `/api/data`, `/api/refresh`. A background thread rescans every
   `scan_interval_minutes`.
@@ -104,7 +111,13 @@ pip install -r requirements.txt
 python scan.py --root C:/projects --depth 2 --pretty     # test the scanner
 python collector.py --config config.yaml --db data.db --once
 GITMON_DB=data.db GITMON_CONFIG=config.yaml python app.py # http://localhost:8083
+python -m unittest discover -s tests                     # stdlib only, no deps
 ```
+
+The tests walk every registered signal (see `signals.py`) through the whole
+pipeline — scan field, DB column, project view, chip, and the roll-up onto a
+collapsed project row — and fail if any stage drops it. Run them after touching
+anything a repo reports about itself.
 
 ## Notes
 

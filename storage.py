@@ -10,6 +10,15 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
+import signals
+
+# The repos table deliberately declares only the columns that are NOT signals
+# (see signals.py). Every signal column is added by _migrate below, on fresh and
+# existing databases alike, so its type is written down in exactly one place.
+# Declaring a column in CREATE TABLE and again in an ALTER is what broke
+# the stashes/untracked migration -- the two spellings disagreed on affinity, so
+# a fresh DB stored ints and an upgraded one handed back strings. With one code
+# path that mismatch has nowhere to come from.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS machines (
     name          TEXT PRIMARY KEY,
@@ -25,18 +34,10 @@ CREATE TABLE IF NOT EXISTS repos (
     path        TEXT,
     name        TEXT,
     branch      TEXT,
-    dirty       INTEGER,
     ahead       INTEGER,
     behind      INTEGER,
-    unpushed    INTEGER,
-    stashes     INTEGER,
-    untracked   INTEGER,
-    precious_files TEXT,
-    has_remote  INTEGER,
-    is_bare     INTEGER,
     last_commit TEXT,
     updated_at  TEXT,
-    error       TEXT,
     PRIMARY KEY (machine, path)
 );
 CREATE TABLE IF NOT EXISTS commit_days (
@@ -81,27 +82,58 @@ def connect(db_path):
     return conn
 
 
+# Non-signal payload columns. JSON blobs and identity fields the renderer never
+# chips: they can't go missing the way a signal can, because something visibly
+# breaks when they do.
+_PAYLOAD_COLS = (
+    ("head_sha", "TEXT"), ("root_key", "TEXT"),
+    ("branch_tips", "TEXT"), ("branch_dates", "TEXT"),
+    ("remotes", "TEXT"), ("unpushed_by_remote", "TEXT"),
+    # A JSON-encoded list of matched paths, not a count.
+    ("precious_files", "TEXT"),
+)
+_JSON_COLS = ("branch_tips", "branch_dates", "remotes", "unpushed_by_remote")
+
+
 def _migrate(conn):
-    """Add columns introduced after a DB was first created."""
+    """Bring an existing DB up to the current column set.
+
+    Signal columns come from signals.STORED rather than a list kept here, so
+    registering a signal is all it takes to persist it. `worktrees` was scanned
+    and rendered for weeks with no column to land in -- the chip simply never
+    appeared, on any machine, for anyone."""
     have = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
     with conn:
-        # precious_files joins this TEXT loop (not the INTEGER one below) --
-        # it's a JSON-encoded list of matched paths, not a count, same shape
-        # as remotes/branch_tips. Reusing an INTEGER column here for a value
-        # that is actually text is exactly the CREATE/ALTER affinity mismatch
-        # that broke the stashes/untracked migration; matching it to the
-        # column's real type on both paths avoids that bug outright.
-        for col in ("error", "head_sha", "root_key", "branch_tips", "branch_dates",
-                    "remotes", "unpushed_by_remote", "precious_files"):
+        for col, typ in _PAYLOAD_COLS + signals.STORED:
             if col not in have:
-                conn.execute("ALTER TABLE repos ADD COLUMN %s TEXT" % col)
-        # stashes/untracked are counts, not text — CREATE TABLE declares them
-        # INTEGER for fresh DBs (see SCHEMA above); an existing DB upgrading in
-        # place only ever sees them through this ALTER path, so it must match
-        # that affinity here too, or inserted ints come back out as strings.
-        for col in ("stashes", "untracked"):
-            if col not in have:
-                conn.execute("ALTER TABLE repos ADD COLUMN %s INTEGER" % col)
+                conn.execute("ALTER TABLE repos ADD COLUMN %s %s" % (col, typ))
+
+
+def _repo_row(machine, ts, r):
+    """One repos row as (columns, values).
+
+    Signal columns are appended from the registry, so a signal that scan.py
+    produces reaches the database without anyone remembering to widen an INSERT
+    here -- the stage where `worktrees` was silently dropped on the floor."""
+    cols = ["machine", "path", "name", "branch", "ahead", "behind",
+            "last_commit", "updated_at"]
+    vals = [machine, r.get("path"), r.get("name"), r.get("branch"),
+            r.get("ahead"), r.get("behind"), r.get("last_commit"), ts]
+    for col, _typ in _PAYLOAD_COLS:
+        if col in _JSON_COLS:
+            vals.append(json.dumps(r.get(col) or {}))
+        elif col == "precious_files":
+            # None (not configured for this scan) stays NULL, distinct from
+            # "[]" (configured, nothing matched) -- see get_repos().
+            vals.append(json.dumps(r[col]) if r.get(col) is not None else None)
+        else:
+            vals.append(r.get(col))
+        cols.append(col)
+    for s in signals.SIGNALS:
+        if s.stored:
+            cols.append(s.key)
+            vals.append(s.to_db(r))
+    return cols, vals
 
 
 def save_scan(conn, machine, ssh, remote_python, result):
@@ -128,31 +160,11 @@ def save_scan(conn, machine, ssh, remote_python, result):
                 (machine, rt.get("path"), 1 if rt.get("exists") else 0, rt.get("found", 0)),
             )
         for r in result.get("repos", []):
+            cols, vals = _repo_row(machine, ts, r)
             conn.execute(
-                """INSERT INTO repos
-                   (machine, path, name, branch, dirty, ahead, behind, unpushed,
-                    stashes, untracked, precious_files,
-                    has_remote, is_bare, last_commit, updated_at, error,
-                    head_sha, root_key, branch_tips, branch_dates,
-                    remotes, unpushed_by_remote)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    machine, r.get("path"), r.get("name"), r.get("branch"),
-                    r.get("dirty"), r.get("ahead"), r.get("behind"),
-                    r.get("unpushed"),
-                    r.get("stashes"), r.get("untracked"),
-                    # None (not configured for this scan) stays NULL, distinct
-                    # from "[]" (configured, nothing matched) -- see get_repos().
-                    json.dumps(r["precious_files"]) if r.get("precious_files") is not None else None,
-                    1 if r.get("has_remote") else 0,
-                    1 if r.get("is_bare") else 0,
-                    r.get("last_commit"), ts, r.get("error"),
-                    r.get("head_sha"), r.get("root_key"),
-                    json.dumps(r.get("branch_tips") or {}),
-                    json.dumps(r.get("branch_dates") or {}),
-                    json.dumps(r.get("remotes") or {}),
-                    json.dumps(r.get("unpushed_by_remote") or {}),
-                ),
+                "INSERT INTO repos (%s) VALUES (%s)"
+                % (", ".join(cols), ", ".join("?" * len(cols))),
+                vals,
             )
             for branch, shas in (r.get("lineage") or {}).items():
                 conn.execute(
@@ -281,36 +293,39 @@ def get_commit_days(conn):
 def get_summary(conn, config=None):
     repos = get_repos(conn, config)
     machines = get_machines(conn)
-    dirty_repos = sum(1 for r in repos if (r["dirty"] or 0) > 0)
-    unpushed_repos = sum(1 for r in repos if (r["unpushed"] or 0) > 0)
-    unpushed_commits = sum(r["unpushed"] or 0 for r in repos)
-    stash_repos = sum(1 for r in repos if (r["stashes"] or 0) > 0)
-    untracked_repos = sum(1 for r in repos if (r["untracked"] or 0) > 0)
+    # Every registered signal, counted both ways, so a signal added later is in
+    # /api/summary without a line being written here. The named keys below are
+    # the curated ones the dashboard's stat tiles and the Homepage widget read;
+    # they are derived from the same totals rather than recounted.
+    by_signal = {
+        s.key: {"repos": sum(1 for r in repos if s.fires(r)),
+                "total": sum(s.count(r) for r in repos)}
+        for s in signals.SIGNALS
+    }
+    n = lambda key, unit: by_signal[key][unit]
     precious_repos = sum(1 for r in repos if r.get("precious_files"))
     precious_files_total = sum(len(r.get("precious_files") or []) for r in repos)
-    # Split by backup coverage (see coverage.py). The headline number is the
-    # ORPHANED count -- the only one that can reach zero, and so the only one
-    # worth putting an alarm colour on. Covered/unknown stay available for the
-    # tooltip and for /api/summary consumers. All three are 0 when no config was
-    # passed, in which case precious_files_total is still the honest total.
-    n_orphaned = sum(len(r.get("precious_orphaned") or []) for r in repos)
-    n_covered = sum(len(r.get("precious_covered") or []) for r in repos)
-    n_unknown = sum(len(r.get("precious_unknown") or []) for r in repos)
-    orphaned_repos = sum(1 for r in repos if r.get("precious_orphaned"))
     offline = sum(1 for m in machines if not m["reachable"])
     return {
         "total_repos": len(repos),
-        "dirty_repos": dirty_repos,
-        "unpushed_repos": unpushed_repos,
-        "stash_repos": stash_repos,
-        "untracked_repos": untracked_repos,
+        "dirty_repos": n("dirty", "repos"),
+        "unpushed_repos": n("unpushed", "repos"),
+        "stash_repos": n("stashes", "repos"),
+        "untracked_repos": n("untracked", "repos"),
         "precious_repos": precious_repos,
         "precious_files_total": precious_files_total,
-        "precious_orphaned_files": n_orphaned,
-        "precious_orphaned_repos": orphaned_repos,
-        "precious_covered_files": n_covered,
-        "precious_unknown_files": n_unknown,
-        "unpushed_commits": unpushed_commits,
+        # Split by backup coverage (see coverage.py). The headline number is the
+        # ORPHANED count -- the only one that can reach zero, and so the only
+        # one worth an alarm colour. Covered/unknown stay available for the
+        # tooltip and for /api/summary consumers. All three are 0 when no config
+        # was passed, in which case precious_files_total is still the honest
+        # total.
+        "precious_orphaned_files": n("precious_orphaned", "total"),
+        "precious_orphaned_repos": n("precious_orphaned", "repos"),
+        "precious_covered_files": n("precious_covered", "total"),
+        "precious_unknown_files": n("precious_unknown", "total"),
+        "unpushed_commits": n("unpushed", "total"),
         "machines": len(machines),
         "offline_machines": offline,
+        "signals": by_signal,
     }

@@ -31,13 +31,23 @@ def _level(count):
 
 
 def rel_time(iso):
-    """Human 'x ago' from an ISO-8601 Z timestamp."""
+    """Human 'x ago' from an ISO-8601 timestamp.
+
+    Two spellings reach here and both have to work. storage.now_iso() writes UTC
+    with a Z; git's `--format=%cI` (scan.py) writes local time with an offset,
+    e.g. 2026-07-30T20:56:12-04:00. Truncating to iso[:19] and declaring the
+    result UTC -- which is what this used to do -- threw that offset away, so
+    every commit time on the page read four hours old on an EDT machine and five
+    in winter. A commit made a minute ago rendered as "4h ago"."""
     if not iso:
         return "never"
     try:
-        t = datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        t = datetime.fromisoformat(iso[:-1] + "+00:00" if iso.endswith("Z") else iso)
     except ValueError:
         return esc(iso)
+    if t.tzinfo is None:
+        # No offset at all: UTC is the only reading that doesn't invent one.
+        t = t.replace(tzinfo=timezone.utc)
     delta = datetime.now(timezone.utc) - t
     s = int(delta.total_seconds())
     if s < 60:

@@ -22,6 +22,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -282,6 +283,39 @@ class EverySignalCanDrawItself(unittest.TestCase):
             self.assertEqual(totals[s.key],
                              s.count(r) if s.card_unit == "items" else 1,
                              "machine cards don't count %r" % s.key)
+
+
+class RelativeTimes(unittest.TestCase):
+    """Both timestamp spellings the app produces read the same instant.
+
+    storage.now_iso() writes UTC with a Z; git's %cI writes local time with an
+    offset. Reading the second as if it were the first put every commit time on
+    the page four hours into the past."""
+
+    def test_an_offset_timestamp_is_not_read_as_utc(self):
+        now = datetime.now(timezone.utc)
+        local = now.astimezone(timezone(timedelta(hours=-4)))
+        self.assertEqual(render.rel_time(local.isoformat(timespec="seconds")),
+                         "just now")
+
+    def test_a_z_timestamp_still_works(self):
+        now = datetime.now(timezone.utc)
+        self.assertEqual(render.rel_time(now.strftime("%Y-%m-%dT%H:%M:%SZ")),
+                         "just now")
+
+    def test_the_two_spellings_agree(self):
+        t = datetime.now(timezone.utc) - timedelta(hours=3)
+        for tz in (timezone.utc, timezone(timedelta(hours=-4)),
+                   timezone(timedelta(hours=5, minutes=30))):
+            with self.subTest(tz=tz):
+                self.assertEqual(
+                    render.rel_time(t.astimezone(tz).isoformat(timespec="seconds")),
+                    render.rel_time(t.strftime("%Y-%m-%dT%H:%M:%SZ")))
+
+    def test_junk_and_nothing_stay_harmless(self):
+        self.assertEqual(render.rel_time(None), "never")
+        self.assertEqual(render.rel_time(""), "never")
+        self.assertEqual(render.rel_time("not a date"), "not a date")
 
 
 if __name__ == "__main__":

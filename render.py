@@ -379,7 +379,8 @@ def render_projects(projects):
 
 
 def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
-                root_warnings=None, repo_errors=None, projects=None, gated=False):
+                root_warnings=None, repo_errors=None, projects=None, gated=False,
+                public_url=""):
     heatmap_svg, year_total = render_heatmap(commit_days)
     # Prefer the newest machine scan time from the DB (survives restarts);
     # fall back to the in-memory last-scan timestamp.
@@ -439,9 +440,18 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
             '<i></i>Config</a>'
             '<button id="refresh" onclick="refresh()">Refresh</button>'
             if gated else
+            # Not gated: this request came in on the published port, which cannot
+            # authenticate. Offer the way IN rather than a label explaining why
+            # things are missing -- hiding the controls without a signpost leaves
+            # someone with no route to the control plane at all.
+            ('<a class="cfglink" href="%s/config" title="The config editor and '
+             'manual refresh are control-plane actions. This link goes through '
+             'lanauth, which will ask you to sign in.">Sign in to configure</a>'
+             % esc(public_url))
+            if public_url else
             '<span class="sub" title="The config editor and manual refresh are '
-            'control-plane actions. Reach this dashboard through '
-            'gitmonitor.funkenjaeger.net to sign in and use them.">read-only view</span>'
+            'control-plane actions, reachable only through the lanauth gate. Set '
+            'GITMON_PUBLIC_URL to show a sign-in link here.">read-only view</span>'
         ),
         "machines": render_machines(machines, repos, root_warnings, repo_errors),
         "repos": render_projects(projects or []),

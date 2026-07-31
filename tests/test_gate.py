@@ -30,7 +30,15 @@ os.environ["GITMON_CONFIG"] = os.path.join(_TMP, "config.yaml")
 with open(os.environ["GITMON_CONFIG"], "w", encoding="utf-8") as _fh:
     _fh.write("targets: []\n")
 
-import app as app_module  # noqa: E402
+try:
+    import app as app_module  # noqa: E402
+except ImportError as exc:  # pragma: no cover
+    # The rest of the suite is stdlib-only and runs anywhere, including on
+    # dserver's system python. This module needs Flask. Skip rather than error:
+    # a red result on a machine that was never going to have the dependency
+    # teaches people the suite is unreliable, and then a real failure gets the
+    # same shrug.
+    raise unittest.SkipTest("git-monitor's runtime deps are absent here (%s)" % exc)
 
 SECRET = "gate-secret-for-tests"
 
@@ -147,6 +155,20 @@ class DashboardShowsOnlyWhatWorks(GateBase):
         self.assertIn("read-only view", body)
         self.assertNotIn('href="/config"', body)
         self.assertNotIn('id="refresh"', body)
+
+    def test_ungated_dashboard_offers_a_way_in_when_a_public_url_is_set(self):
+        """Hiding the controls without a signpost leaves someone stranded: the
+        published port cannot authenticate, so the page has to point at the one
+        that can."""
+        real = app_module.PUBLIC_URL
+        app_module.PUBLIC_URL = "https://gitmonitor.example.net"
+        try:
+            body = self.client.get("/").get_data(as_text=True)
+        finally:
+            app_module.PUBLIC_URL = real
+        self.assertIn("Sign in to configure", body)
+        self.assertIn("https://gitmonitor.example.net/config", body)
+        self.assertNotIn("read-only view", body)
 
     def test_gated_dashboard_offers_them(self):
         body = self.client.get(

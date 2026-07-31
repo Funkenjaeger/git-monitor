@@ -102,6 +102,11 @@ def _config_or_empty():
 # body.
 GATE_HEADER = "X-Gitmonitor-Gate"
 GATE_SECRET = os.environ.get("GITMON_GATE_SECRET", "")
+# Where to send someone who wants the control plane. The dashboard is reachable
+# both through lanauth and directly on the published port; only the first can
+# authenticate, and someone who arrived the other way otherwise has no signpost
+# at all -- just controls that quietly are not there.
+PUBLIC_URL = os.environ.get("GITMON_PUBLIC_URL", "").rstrip("/")
 
 
 def through_gate():
@@ -155,7 +160,8 @@ def index():
     return render_page(summary, machines, repos, commit_days,
                        top_n=top_n, last_scan=_last_scan,
                        root_warnings=root_warnings, repo_errors=repo_errors,
-                       projects=project_tree, gated=through_gate())
+                       projects=project_tree, gated=through_gate(),
+                       public_url=PUBLIC_URL)
 
 
 @app.route("/api/summary")

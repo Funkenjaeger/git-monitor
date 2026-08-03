@@ -107,6 +107,14 @@ def _migrate(conn):
         for col, typ in _PAYLOAD_COLS + signals.STORED:
             if col not in have:
                 conn.execute("ALTER TABLE repos ADD COLUMN %s %s" % (col, typ))
+        have_m = {r["name"] for r in conn.execute("PRAGMA table_info(machines)")}
+        if "fail_streak" not in have_m:
+            # Consecutive-failure counter backing the OFFLINE debounce in
+            # mark_unreachable/save_scan below. Additive and defaulted, like the
+            # repos columns above, so a live DB with rows in it loads with no
+            # manual migration.
+            conn.execute(
+                "ALTER TABLE machines ADD COLUMN fail_streak INTEGER DEFAULT 0")
 
 
 def _repo_row(machine, ts, r):
@@ -141,12 +149,12 @@ def save_scan(conn, machine, ssh, remote_python, result):
     ts = now_iso()
     with conn:
         conn.execute(
-            """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, last_success, error)
-               VALUES (?, ?, ?, 1, ?, ?, NULL)
+            """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, last_success, error, fail_streak)
+               VALUES (?, ?, ?, 1, ?, ?, NULL, 0)
                ON CONFLICT(name) DO UPDATE SET
                    ssh=excluded.ssh, remote_python=excluded.remote_python,
                    reachable=1, last_scanned=excluded.last_scanned,
-                   last_success=excluded.last_success, error=NULL""",
+                   last_success=excluded.last_success, error=NULL, fail_streak=0""",
             (machine, ssh, remote_python, ts, ts),
         )
         conn.execute("DELETE FROM repos WHERE machine=?", (machine,))
@@ -180,16 +188,34 @@ def save_scan(conn, machine, ssh, remote_python, result):
                 )
 
 
+# Consecutive scan failures required before a machine flips to OFFLINE. A
+# lone timeout is routine (a slow network blip, a host mid-reboot); flapping
+# the dashboard to OFFLINE and back for one bad cycle trains everyone to
+# ignore the label. Two in a row is the signal.
+OFFLINE_AFTER_FAILURES = 2
+
+
 def mark_unreachable(conn, machine, ssh, remote_python, error):
-    """Flag a machine offline but keep its last snapshot intact."""
+    """Record a failed scan; flip the machine OFFLINE only on the Nth
+    consecutive failure (see OFFLINE_AFTER_FAILURES).
+
+    The error and last_scanned time are recorded on every failure regardless,
+    so a debounced first failure is not silent -- it just doesn't (yet) claim
+    the machine is down. A success anywhere in between resets the streak (see
+    save_scan), so this counts CONSECUTIVE failures, not failures overall.
+    """
     ts = now_iso()
     with conn:
         conn.execute(
-            """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, error)
-               VALUES (?, ?, ?, 0, ?, ?)
+            """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, error, fail_streak)
+               VALUES (?, ?, ?, 0, ?, ?, 1)
                ON CONFLICT(name) DO UPDATE SET
                    ssh=excluded.ssh, remote_python=excluded.remote_python,
-                   reachable=0, last_scanned=excluded.last_scanned, error=excluded.error""",
+                   last_scanned=excluded.last_scanned, error=excluded.error,
+                   fail_streak=machines.fail_streak + 1,
+                   reachable=CASE WHEN machines.fail_streak + 1 >= %d
+                                  THEN 0 ELSE machines.reachable END"""
+            % OFFLINE_AFTER_FAILURES,
             (machine, ssh, remote_python, ts, error),
         )
 

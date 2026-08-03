@@ -24,7 +24,10 @@ config.yaml ──► collector.py ──► scan.py (piped over SSH to each hos
   not on any remote — works even with no upstream), last-commit time, and a
   per-day commit histogram. Prints JSON. Runs under any Python 3.6+.
 - **collector.py** — for each target runs scan.py locally (`ssh: local`) or via
-  `ssh host <python> - <b64config> < scan.py`. Unreachable → offline, snapshot kept.
+  `ssh host <python> - <b64config> < scan.py`. Set `remote_script: installed` for
+  a host whose sshd always execs its own copy of scan.py and never reads stdin
+  (piping into one hangs the ssh session until timeout). Unreachable → offline
+  after 2 consecutive failed scans (one blip stays online), snapshot kept.
 - **storage.py** — sqlite. A successful scan replaces that machine's rows.
 - **signals.py** — the registry of everything the dashboard can say about a
   repo (dirty, unpushed, stashes, untracked, precious files, worktrees, no

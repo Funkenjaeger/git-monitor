@@ -51,6 +51,21 @@ ssh_identity: /data/id_ed25519
 ssh_options:
   - UserKnownHostsFile=/data/known_hosts
 
+# remote_script: piped | installed   (default: piped; override per-target)
+#
+# 'piped' is the normal path: scan.py's own bytes are sent over stdin
+# (`ssh host python - <b64config> < scan.py`), so nothing needs to be
+# installed on the remote. Set `remote_script: installed` for a host that is
+# fronted by an SSH forced-command wrapper (e.g. Windows OpenSSH's
+# `ForceCommand`, or any setup where the remote always execs its OWN
+# installed copy of scan.py regardless of what the client sends). Such a
+# wrapper never reads stdin, and piping scan.py's bytes into a process that
+# never drains stdin fills the OS pipe buffer and hangs the whole ssh session
+# until `timeout` -- indistinguishable from a dead host except for the
+# suspiciously round wait. `installed` sends no stdin at all. Whatever
+# scan.py the remote's wrapper execs must be kept in sync with this repo's
+# scan.py by hand (there is no push-the-script path for this host anymore).
+
 targets:
   # The collector host itself — scanned locally, no SSH. Point roots at wherever
   # your repos live; use `bare: true` for a directory of bare repos.
@@ -80,6 +95,9 @@ targets:
     precious_coverage: []
     # extra:   [ "D:/oneoff/some-repo" ]     # explicit repos outside the roots
     # exclude: [ "C:/projects/huge-vendored" ]
+    # If this host's sshd is set up with a forced command that always execs an
+    # installed scan.py (see `remote_script` above), uncomment:
+    # remote_script: installed
 
   # A Linux machine.
   - name: linux-pc

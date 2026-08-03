@@ -7,7 +7,10 @@ Reads config.yaml, scans each target, and writes results to SQLite.
 - Remote targets pipe scan.py to the host's own interpreter over SSH:
       ssh <opts> host <remote_python> - <b64config>   (scan.py on stdin)
   so nothing needs to be installed on the remote and there is no shell quoting
-  to get wrong. Unreachable hosts fail fast and keep their last snapshot.
+  to get wrong. A target with `remote_script: installed` skips the stdin pipe
+  instead -- for hosts fronted by an SSH forced-command wrapper that always
+  execs its own installed scan.py and never reads stdin (see run_remote).
+  Unreachable hosts fail fast and keep their last snapshot.
 
 Run standalone:  python collector.py --config config.yaml --db data.db --once
 """
@@ -57,14 +60,72 @@ def _b64(cfg):
     return base64.b64encode(json.dumps(cfg).encode("utf-8")).decode("ascii")
 
 
+SNIP = "...<snip>..."
+
+
+def _tail_truncate(text, limit):
+    """Truncate `text` to `limit` chars, keeping the TAIL.
+
+    Used for subprocess stderr: a Python traceback puts the actual error on
+    its last line, and a head-truncated capture was cutting straight through
+    to nothing but the top of the traceback."""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= len(SNIP):
+        return text[-limit:]
+    return SNIP + text[-(limit - len(SNIP)):]
+
+
+def _middle_truncate(text, limit):
+    """Truncate `text` to `limit` chars, keeping both HEAD and TAIL.
+
+    Used for exception messages, where the head usually names what was being
+    attempted and the tail carries the actual complaint (e.g.
+    `subprocess.TimeoutExpired`'s "...timed out after N seconds"). A plain
+    head slice on a long `Command '[...]'` repr can land entirely inside the
+    argv dump and lose the message end-to-end -- see `_shape_error`."""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= len(SNIP):
+        return text[:limit]
+    keep = limit - len(SNIP)
+    head = keep - keep // 3        # bias toward the head; the tail matters more
+    tail = keep - head
+    return text[:head] + SNIP + (text[-tail:] if tail else "")
+
+
+def _shape_error(exc, limit=400):
+    """Render a caught exception so the TYPE and the TAIL of its message
+    survive truncation to `limit` chars.
+
+    `str(exc)[:400]` was the whole story before this, and for a
+    `subprocess.TimeoutExpired` raised from `run_remote` that is a disaster:
+    `str()` on that exception has no class name in it at all (just the
+    message), and the message opens with `Command '[...]'` -- the full argv
+    list, including the base64-encoded scan config. On a real timeout the
+    first 400 chars of that repr never reach the "timed out after N seconds"
+    at the end, so the stored error was neither identifiable (no type name)
+    nor useful (no actual message) -- just a slice of a base64 blob. A
+    24-cycle outage read as an opaque string with no way to tell a timeout
+    from an auth failure from a JSON parse error.
+    """
+    prefix = "%s: " % type(exc).__name__
+    return prefix + _middle_truncate(str(exc), max(limit - len(prefix), 0))
+
+
 def run_local(scan_cfg, timeout):
     proc = subprocess.run(
         [sys.executable, SCAN_PY, _b64(scan_cfg)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            "local scan failed: " + proc.stderr.decode("utf-8", "replace")[:400])
+        prefix = "local scan failed: "
+        raise RuntimeError(prefix + _tail_truncate(
+            proc.stderr.decode("utf-8", "replace"), 400 - len(prefix)))
     return json.loads(proc.stdout.decode("utf-8", "replace"))
 
 
@@ -73,6 +134,16 @@ def run_remote(target, scan_cfg, defaults):
     remote_python = target.get("remote_python", defaults.get("remote_python", "python3"))
     connect_timeout = int(target.get("connect_timeout", defaults.get("connect_timeout", 8)))
     overall_timeout = int(target.get("timeout", defaults.get("timeout", 90)))
+    # 'piped' (default): scan.py's bytes go over stdin, so nothing needs to be
+    # installed on the remote. 'installed' is for hosts fronted by an SSH
+    # forced-command wrapper (e.g. Windows sshd's ForceCommand) that execs its
+    # own copy of scan.py regardless of what we send and never reads stdin --
+    # piping the script into a process that never drains its stdin fills the
+    # OS pipe buffer and hangs the ssh session until `timeout`. The desktop
+    # target sat in exactly that deadlock for ~24 scan cycles before this
+    # option existed (confirmed 2026-08-03: the identical ssh command with
+    # stdin closed completed in 15.7s). Send no bytes for these hosts instead.
+    remote_script = target.get("remote_script", defaults.get("remote_script", "piped"))
 
     ssh_cmd = ["ssh",
                "-o", "BatchMode=yes",
@@ -85,17 +156,20 @@ def run_remote(target, scan_cfg, defaults):
         ssh_cmd += ["-o", opt]
     ssh_cmd += [host, remote_python, "-", _b64(scan_cfg)]
 
-    with open(SCAN_PY, "rb") as fh:
-        scan_bytes = fh.read()
+    if remote_script == "installed":
+        scan_bytes = b""
+    else:
+        with open(SCAN_PY, "rb") as fh:
+            scan_bytes = fh.read()
 
     proc = subprocess.run(
         ssh_cmd, input=scan_bytes,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=overall_timeout,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            "ssh scan failed (rc=%d): %s"
-            % (proc.returncode, proc.stderr.decode("utf-8", "replace")[:400]))
+        prefix = "ssh scan failed (rc=%d): " % proc.returncode
+        raise RuntimeError(prefix + _tail_truncate(
+            proc.stderr.decode("utf-8", "replace"), 400 - len(prefix)))
     out = proc.stdout.decode("utf-8", "replace").strip()
     # A remote login shell can emit a banner/MOTD before our JSON; take the
     # last JSON object on stdout to be safe.
@@ -114,7 +188,7 @@ def scan_target(target, defaults):
             return True, run_local(scan_cfg, int(defaults.get("timeout", 90)))
         return True, run_remote(target, scan_cfg, defaults)
     except Exception as exc:
-        return False, str(exc)[:400]
+        return False, _shape_error(exc)
 
 
 def collect_one(conn, target, defaults):

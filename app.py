@@ -48,8 +48,14 @@ def run_scan():
         results = collector.collect_all(conn, config)
         conn.close()
         _last_scan["at"] = storage.now_iso()
+        # `ok` is the "nothing to report" flag consumers gate their alerts on;
+        # `status` says which kind of nothing (see collector.collect_one). A
+        # target that was unreachable outside its expected-online window is
+        # ok=True, status="off_hours", with the error still in `info` for
+        # anyone who wants to look.
         _last_scan["results"] = [
-            {"machine": n, "ok": ok, "info": info} for n, ok, info in results
+            {"machine": n, "ok": ok, "info": info, "status": status}
+            for n, ok, info, status in results
         ]
         return {"results": _last_scan["results"], "at": _last_scan["at"]}
     finally:
@@ -145,7 +151,7 @@ def index():
     conn = get_conn()
     try:
         summary = storage.get_summary(conn, cfg)
-        machines = storage.get_machines(conn)
+        machines = storage.get_machines(conn, cfg)
         repos = storage.get_repos(conn, cfg)
         commit_days = storage.get_commit_days(conn)
         root_warnings = storage.get_root_warnings(conn)
@@ -181,7 +187,7 @@ def api_data():
     try:
         return jsonify({
             "summary": storage.get_summary(conn, cfg),
-            "machines": storage.get_machines(conn),
+            "machines": storage.get_machines(conn, cfg),
             "repos": storage.get_repos(conn, cfg),
             "commit_days": storage.get_commit_days(conn),
             "root_warnings": storage.get_root_warnings(conn),

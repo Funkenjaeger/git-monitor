@@ -28,6 +28,10 @@ config.yaml ──► collector.py ──► scan.py (piped over SSH to each hos
   a host whose sshd always execs its own copy of scan.py and never reads stdin
   (piping into one hangs the ssh session until timeout). Unreachable → offline
   after 2 consecutive failed scans (one blip stays online), snapshot kept.
+- **uptime.py** — per-target `expected_online` windows. A machine that is
+  deliberately off overnight is not a fault: outside its window an unreachable
+  target is not debounced, not counted offline and not reported as a failed
+  scan, and the dashboard shows it as `off-hours`. See [Configuration](#configuration).
 - **storage.py** — sqlite. A successful scan replaces that machine's rows.
 - **signals.py** — the registry of everything the dashboard can say about a
   repo (dirty, unpushed, stashes, untracked, precious files, worktrees, no
@@ -66,6 +70,42 @@ large/vendored trees. See [config.example.yaml](config.example.yaml).
 
 (Note: browser saves are written by the container as root, so if you later edit
 the file over SSH you may need `sudo`.)
+
+### Machines that are off part of the day
+
+The 2-failure debounce guards against a *blip*. A workstation that is powered
+off every night fails every scan in a row and trips it on the second one, so it
+reported `OFFLINE` every night — permanently red, and therefore worth nothing.
+Give such a target the hours it is expected to be up:
+
+```yaml
+timezone: America/New_York        # file-level default; no guessing, see below
+
+targets:
+  - name: desktop
+    ssh: user@192.168.1.20
+    expected_online: "07:00-23:00"          # shorthand: hours, every day
+    # expected_online:                      # or the full form
+    #   hours: "07:00-23:00"                # end EXCLUSIVE; may cross midnight
+    #   days: [mon, tue, wed, thu, fri]     # optional; default every day
+    #   timezone: Europe/Berlin             # optional; overrides the default
+```
+
+Outside the window, a failure to reach the target is recorded (error and
+timestamp, as always) but not *judged*: no `fail_streak`, no `reachable`
+change, not counted in `offline_machines`, and `ok: true` in
+`last_scan.results`. The scan is still attempted, so a machine that happens to
+be up at 02:00 is picked up anyway. **The trade, accepted deliberately: a
+genuinely dead machine goes unreported until its window opens.**
+
+`timezone` has no default — the collector container's clock is UTC while the
+hours you write are wall-clock hours, and guessing would shift every window by
+the UTC offset while still looking like a working feature. A window that cannot
+be parsed (or names a zone with no database behind it) is ignored, everything
+alerts exactly as it would with no window at all, and the machine card says so;
+a save through `/config` refuses it outright. Timezone data comes from the
+`tzdata` package in requirements.txt, since neither python:slim nor Python on
+Windows ships one.
 
 ## Requirements on each monitored machine
 

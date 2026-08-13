@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 import storage
+import uptime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCAN_PY = os.path.join(HERE, "scan.py")
@@ -192,15 +193,32 @@ def scan_target(target, defaults):
 
 
 def collect_one(conn, target, defaults):
+    """Scan one target and record the outcome. Returns (ok, info, status).
+
+    `status` is "ok", "failed", or "off_hours". `ok` is the "nothing to report"
+    flag -- it is what /api/data exposes and what alerting consumers gate on --
+    so it is True both for a clean scan and for a target that was unreachable
+    OUTSIDE its declared expected-online window (see uptime.py). Those are
+    different events, which is what `status` and `info` are for; what they have
+    in common is that neither is a fault to wake anyone about.
+
+    The scan is still ATTEMPTED off-hours rather than skipped. A machine that
+    happens to be up at 02:00 then gets its repos refreshed for free, and the
+    unreachable path stays the single place where a failure is judged.
+    """
     name = target["name"]
     ssh = target.get("ssh", "local")
     remote_python = target.get("remote_python", defaults.get("remote_python", "python3"))
     ok, result = scan_target(target, defaults)
     if ok:
         storage.save_scan(conn, name, ssh, remote_python, result)
-        return True, len(result.get("repos", []))
-    storage.mark_unreachable(conn, name, ssh, remote_python, result)
-    return False, result
+        return True, len(result.get("repos", [])), "ok"
+    expected_offline = uptime.off_hours(target, defaults)
+    storage.mark_unreachable(conn, name, ssh, remote_python, result,
+                             expected_offline=expected_offline)
+    if expected_offline:
+        return True, result, "off_hours"
+    return False, result, "failed"
 
 
 def collect_all(conn, config):
@@ -208,8 +226,8 @@ def collect_all(conn, config):
     targets = config.get("targets", [])
     results = []
     for target in targets:
-        ok, info = collect_one(conn, target, defaults)
-        results.append((target["name"], ok, info))
+        ok, info, status = collect_one(conn, target, defaults)
+        results.append((target["name"], ok, info, status))
     storage.prune_machines(conn, {t["name"] for t in targets})
     return results
 
@@ -230,6 +248,7 @@ def validate_config(cfg):
     if not isinstance(targets, list) or not targets:
         raise ValueError("`targets` must be a non-empty list")
     seen = set()
+    defaults = {k: v for k, v in cfg.items() if k != "targets"}
     for t in targets:
         if not isinstance(t, dict):
             raise ValueError("each target must be a mapping")
@@ -267,6 +286,17 @@ def validate_config(cfg):
                     raise ValueError(
                         "target %s: precious_coverage entries must be a path "
                         "string or a {path, by} mapping" % name)
+        # Expected-online window (see uptime.py). Checked here because uptime
+        # deliberately fails OPEN at scan time: a mistyped window is ignored
+        # and everything keeps alerting exactly as before, which is the safe
+        # behaviour but also a completely silent one. Save time is the moment
+        # someone is looking, so a window that will not parse -- or names a
+        # timezone this interpreter has no database for -- is refused here
+        # instead of quietly doing nothing for weeks.
+        if uptime.spec_for(t, defaults) is not None:
+            _window, err = uptime.window_for(t, defaults)
+            if err:
+                raise ValueError("target %s: expected_online: %s" % (name, err))
         if not roots and not t.get("extra"):
             raise ValueError("target %s: needs at least one root or extra path" % name)
     return True
@@ -468,9 +498,12 @@ def main():
     config = load_config(args.config)
     conn = storage.connect(args.db)
     results = collect_all(conn, config)
-    for name, ok, info in results:
-        if ok:
+    for name, _ok, info, status in results:
+        if status == "ok":
             print("[ok]   %-12s %s repos" % (name, info))
+        elif status == "off_hours":
+            print("[off]  %-12s outside its expected-online window; not "
+                  "counted (%s)" % (name, info))
         else:
             print("[FAIL] %-12s %s" % (name, info))
 

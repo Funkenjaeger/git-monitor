@@ -175,15 +175,34 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     cards = []
     for m in machines:
         t = totals.get(m["name"], {"repos": 0})
-        online = bool(m["reachable"])
+        # storage.get_machines annotates `status` when it was given a config:
+        # "online" | "offline" | "off-hours" (see uptime.annotate). Fall back
+        # to the reachable column for an unannotated row -- exactly what this
+        # did before expected-online windows existed.
+        status = m.get("status") or ("online" if m["reachable"] else "offline")
+        online = status == "online"
         dot = "on" if online else "off"
-        status = "online" if online else "offline"
         sub = _machine_sub(t)
         seen = rel_time(m["last_scanned"])
+        stitle = ""
         err = ""
-        if not online and m["error"]:
+        if status == "off-hours":
+            # Not an error: this machine declared when it expects to be up, and
+            # now is not that time. Keep the detail one hover away instead of
+            # printing a red line every night for a setup working as intended.
+            stitle = ' title="expected online %s%s"' % (
+                esc(m.get("expected_online") or "?"),
+                ("; last scan: " + esc(m["error"])) if m.get("error") else "")
+        elif status == "offline" and m["error"]:
             err = '<div class="merr" title="%s">%s</div>' % (
                 esc(m["error"]), esc(m["error"][:60]))
+        # A window that could not be parsed is IGNORED -- uptime.py fails open,
+        # so alerting stays exactly as it is today -- but ignoring it silently
+        # would leave someone believing this machine is covered. Say so.
+        if m.get("window_error"):
+            err += ('<div class="mwarn" title="expected_online: %s">&#9888; '
+                    'expected-online window ignored</div>'
+                    % esc(m["window_error"]))
         # Flag configured roots that are missing or yielded nothing (e.g. an
         # unmounted NFS share) so repos don't just silently disappear.
         for w in root_warnings.get(m["name"], []):
@@ -200,9 +219,9 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
                     % (esc(detail), len(bad), "" if len(bad) == 1 else "s"))
         cards.append(
             '<div class="mcard %s"><div class="mrow"><span class="dot %s"></span>'
-            '<span class="mname">%s</span><span class="mstatus">%s</span></div>'
+            '<span class="mname">%s</span><span class="mstatus"%s>%s</span></div>'
             '<div class="msub">%s</div><div class="mseen">scanned %s</div>%s</div>'
-            % (dot, dot, esc(m["name"]), status, sub, seen, err))
+            % (dot, dot, esc(m["name"]), stitle, status, sub, seen, err))
     return '<div class="machines">%s</div>' % "".join(cards)
 
 

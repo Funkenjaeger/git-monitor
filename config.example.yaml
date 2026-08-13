@@ -66,6 +66,41 @@ ssh_options:
 # scan.py the remote's wrapper execs must be kept in sync with this repo's
 # scan.py by hand (there is no push-the-script path for this host anymore).
 
+# Timezone for expected_online windows below. Set it here once and every target
+# inherits it; override per target for a machine in another zone. There is NO
+# default: the collector container's own clock is UTC, so guessing would shift
+# every window by the UTC offset and produce a feature that looks like it works.
+timezone: America/New_York
+
+# expected_online: when a target is EXPECTED to be reachable.
+#
+# A machine that is deliberately powered off overnight is not a fault, but
+# nothing in the scanner knew that: the 2-consecutive-failure debounce
+# (OFFLINE_AFTER_FAILURES in storage.py) guards against a BLIP, and an
+# eight-hour absence trips it on the second scan like any real outage. A
+# desktop that is off every night therefore reported OFFLINE every night --
+# permanently red, and so worth nothing.
+#
+# Outside its window, a target that fails to answer is not debounced, not
+# counted in offline_machines, and not reported as a failed scan; the dashboard
+# shows it as "off-hours" rather than green or red. The scan is still
+# attempted, so a machine that happens to be up at 02:00 is still picked up.
+#
+# The accepted trade: a genuinely dead machine goes unreported until its window
+# opens. Declare a window only where that is the right trade.
+#
+#   expected_online: "07:00-23:00"          # shorthand: hours only, every day
+#
+#   expected_online:                        # full form
+#     hours: "07:00-23:00"                  # end EXCLUSIVE; may cross midnight
+#     days: [mon, tue, wed, thu, fri]       # optional; default every day
+#     timezone: Europe/Berlin               # optional; defaults to the above
+#
+# A window that will not parse is IGNORED (everything alerts exactly as it
+# would with no window at all) and the machine card says so -- but a save
+# through /config refuses it outright, which is the moment someone is looking.
+# Omit expected_online entirely for anything that is meant to be up 24/7.
+
 targets:
   # The collector host itself — scanned locally, no SSH. Point roots at wherever
   # your repos live; use `bare: true` for a directory of bare repos.
@@ -93,6 +128,9 @@ targets:
     # precious here really is orphaned. Pushing to GitHub does not count --
     # a gitignored file is precisely what a push cannot carry.
     precious_coverage: []
+    # This one is a workstation, not a server: it is off overnight by design,
+    # so an unanswered scan at 02:00 is expected rather than alarming.
+    expected_online: "07:00-23:00"
     # extra:   [ "D:/oneoff/some-repo" ]     # explicit repos outside the roots
     # exclude: [ "C:/projects/huge-vendored" ]
     # If this host's sshd is set up with a forced command that always execs an

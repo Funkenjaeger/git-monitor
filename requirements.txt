@@ -5,3 +5,10 @@ pyyaml>=6.0
 # it regenerates the document and drops every comment silently. See
 # collector.save_config_dict.
 ruamel.yaml>=0.18
+# Timezone database for the stdlib's zoneinfo, used by uptime.py to evaluate a
+# target's expected-online window in the zone the config names. Not optional in
+# practice: python:3.12-slim ships no system tz database (and Python on Windows
+# never has one), so without this ZoneInfo("America/New_York") raises and every
+# window is ignored. uptime.py fails open, so the only symptom would be alerts
+# behaving exactly as they do today -- a feature that silently does nothing.
+tzdata>=2024.1

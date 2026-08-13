@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 import signals
+import uptime
 
 # The repos table deliberately declares only the columns that are NOT signals
 # (see signals.py). Every signal column is added by _migrate below, on fresh and
@@ -195,7 +196,8 @@ def save_scan(conn, machine, ssh, remote_python, result):
 OFFLINE_AFTER_FAILURES = 2
 
 
-def mark_unreachable(conn, machine, ssh, remote_python, error):
+def mark_unreachable(conn, machine, ssh, remote_python, error,
+                     expected_offline=False):
     """Record a failed scan; flip the machine OFFLINE only on the Nth
     consecutive failure (see OFFLINE_AFTER_FAILURES).
 
@@ -203,8 +205,31 @@ def mark_unreachable(conn, machine, ssh, remote_python, error):
     so a debounced first failure is not silent -- it just doesn't (yet) claim
     the machine is down. A success anywhere in between resets the streak (see
     save_scan), so this counts CONSECUTIVE failures, not failures overall.
+
+    `expected_offline` is for a target that declared an expected-online window
+    and is outside it right now (see uptime.py): the attempt and its error are
+    still recorded, but nothing is CONCLUDED from them. The debounce above is
+    the wrong instrument for a machine that is off every night by design -- a
+    nine-hour absence fails every consecutive scan and trips a
+    two-in-a-row rule on the second one, which is what put a permanent red
+    OFFLINE on a desktop that was working exactly as intended.
     """
     ts = now_iso()
+    if expected_offline:
+        # No fail_streak increment and no `reachable` change: this failure is
+        # not evidence about the machine's health, so it must not accumulate
+        # into a verdict, and it must not clear one either (a machine that
+        # went offline DURING its window keeps that state until it succeeds).
+        with conn:
+            conn.execute(
+                """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, error, fail_streak)
+                   VALUES (?, ?, ?, 0, ?, ?, 0)
+                   ON CONFLICT(name) DO UPDATE SET
+                       ssh=excluded.ssh, remote_python=excluded.remote_python,
+                       last_scanned=excluded.last_scanned, error=excluded.error""",
+                (machine, ssh, remote_python, ts, error),
+            )
+        return
     with conn:
         conn.execute(
             """INSERT INTO machines (name, ssh, remote_python, reachable, last_scanned, error, fail_streak)
@@ -233,9 +258,24 @@ def prune_machines(conn, keep_names):
 
 # ---- read side (used by the Flask app) -------------------------------------
 
-def get_machines(conn):
-    return [dict(r) for r in conn.execute(
+def get_machines(conn, config=None, now=None):
+    """Machine rows. Pass `config` to have each row annotated with its
+    expected-online state (see uptime.annotate) -- which window it declared,
+    whether it is outside that window right now, and the status word the
+    dashboard should print.
+
+    Evaluated at READ time, against the current clock, because that is the
+    question being asked: "is this machine expected to be up NOW?". Storing the
+    answer at scan time instead would freeze a judgement that goes stale within
+    the hour -- a machine that failed twice at 22:45 (inside its window, so
+    genuinely OFFLINE) would still be shouting OFFLINE at 03:00, when nobody
+    expects it to be up at all.
+    """
+    rows = [dict(r) for r in conn.execute(
         "SELECT * FROM machines ORDER BY name").fetchall()]
+    if config is not None:
+        uptime.annotate(rows, config, now=now)
+    return rows
 
 
 def get_repos(conn, config=None):
@@ -316,9 +356,9 @@ def get_commit_days(conn):
     return {r["day"]: r["c"] for r in rows}
 
 
-def get_summary(conn, config=None):
+def get_summary(conn, config=None, now=None):
     repos = get_repos(conn, config)
-    machines = get_machines(conn)
+    machines = get_machines(conn, config, now=now)
     # Every registered signal, counted both ways, so a signal added later is in
     # /api/summary without a line being written here. The named keys below are
     # the curated ones the dashboard's stat tiles and the Homepage widget read;
@@ -331,7 +371,14 @@ def get_summary(conn, config=None):
     n = lambda key, unit: by_signal[key][unit]
     precious_repos = sum(1 for r in repos if r.get("precious_files"))
     precious_files_total = sum(len(r.get("precious_files") or []) for r in repos)
-    offline = sum(1 for m in machines if not m["reachable"])
+    # A machine outside its declared expected-online window is not counted:
+    # `offline_machines` is what downstream monitors alarm on, and an alarm
+    # that fires every night on a desktop that is SUPPOSED to be off is a
+    # false positive that devalues every other number on the panel. With no
+    # config passed, or no window declared, off_hours is False everywhere and
+    # this is the plain `not reachable` count it has always been.
+    offline = sum(1 for m in machines
+                  if not m["reachable"] and not m.get("off_hours"))
     return {
         "total_repos": len(repos),
         "dirty_repos": n("dirty", "repos"),

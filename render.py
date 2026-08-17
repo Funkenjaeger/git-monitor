@@ -499,6 +499,18 @@ def render_page(summary, machines, repos, commit_days, top_n=12, last_scan=None,
                       summary["precious_covered_files"],
                       summary["precious_unknown_files"])),
         stat("offline machines", summary["offline_machines"], "warn" if summary["offline_machines"] else ""),
+        # ALERT, not warn, and deliberately louder than its neighbour: an offline
+        # machine announces itself, a stale one does not. It keeps serving its
+        # last snapshot as though observed now, which is how the desktop showed a
+        # fortnight-old picture to every reader in Aug 2026 with no signal at all.
+        stat("stale snapshots", summary["stale_machines"],
+             "alert" if summary["stale_machines"] else "",
+             "Machines whose last SUCCESSFUL scan is older than stale_after_days "
+             "(3 -- see the homelab wiki, Conventions, The attention horizon). "
+             "Counted independently of offline machines: a host can be legitimately "
+             "OFF-HOURS rather than offline and still be serving a snapshot weeks "
+             "old. The repos listed for such a machine came from that old scan, "
+             "not from now."),
     ])
 
     out = PAGE

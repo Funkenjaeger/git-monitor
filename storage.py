@@ -322,17 +322,103 @@ def get_projects(conn, config=None):
     return projects.build_projects(get_repos(conn, config), get_lineages(conn))
 
 
-def get_root_warnings(conn):
+def _repo_key(name):
+    """Repo names are compared case-insensitively: `roots` on the desktop
+    target are NTFS paths, where Reflex-UI and reflex-ui are the same
+    directory, and an alarm that fires on letter case is noise."""
+    return (name or "").strip().lower()
+
+
+def get_missing_repos(conn, config=None, now=None):
+    """Repos a target DECLARES it should be carrying that the last scan did
+    NOT find, keyed by machine.
+
+    Every other check in this file reports on a repo that IS there. Nothing
+    reported on one that stopped being there. A repo that falls out of scope --
+    a path that moved, a `depth` set one level too shallow, a root that
+    silently stopped matching -- simply produces no rows, and no rows is also
+    exactly what a machine with nothing to say looks like. There is no signal
+    to fire, because there is no repo to fire it on.
+
+    2026-08-17 is what that costs. elspi's only root was {path: /, depth: 1},
+    so /home/default/projects/reflex-fw (three levels down) was never walked.
+    Both reflex-ui and reflex-fw were carrying single-copy work that night; the
+    nightly digest alarmed about reflex-ui and said nothing at all about
+    reflex-fw -- and its silence was indistinguishable from reflex-fw being
+    fine. `roots` says where to look; `expected_repos` says what has to come
+    back.
+
+    DECLARED, not inferred from what was found last time. A "we saw it
+    yesterday and not today" rule cannot catch the case it is most needed for
+    -- a scan root that was wrong from the day it was written, which is the
+    08-17 shape exactly -- and it would turn every intentional repo deletion
+    into an alarm that has to be cleared by hand.
+
+    Evaluated at READ time against the current config, like precious coverage
+    (coverage.py) and expected-online (uptime.py): the declaration lives in
+    config.yaml, so editing it takes effect on the next page load rather than
+    on the next successful scan of a machine that may well be down.
+
+    A machine is only checked when the DB holds a scan worth checking:
+
+      * status must be "online". An OFFLINE or off-hours host already explains
+        the absence, and alarming there would make every host that is merely
+        powered off emit one false alarm per declared repo, every cycle -- the
+        same way an unwindowed desktop used to emit a nightly OFFLINE. (A
+        first, debounced failure keeps `reachable` AND the previous snapshot,
+        so it stays checked, against real data.)
+      * last_success must be set. A target that has never once been scanned
+        successfully has no repo list to compare against, and "scan failed on
+        X" is already the alarm for that.
+    """
+    if not config:
+        return {}
+    by_name = uptime.targets_by_name(config)
+    found = {}
+    for r in conn.execute("SELECT machine, name FROM repos"):
+        found.setdefault(r["machine"], set()).add(_repo_key(r["name"]))
+    out = {}
+    for m in get_machines(conn, config, now=now):
+        declared = (by_name.get(m.get("name")) or {}).get("expected_repos") or []
+        if not declared:
+            continue
+        if m.get("status") != "online" or not m.get("last_success"):
+            continue
+        here = found.get(m["name"], set())
+        gone = [str(d) for d in declared if _repo_key(d) not in here]
+        if gone:
+            out[m["name"]] = gone
+    return out
+
+
+def get_root_warnings(conn, config=None, now=None):
     """Roots that are missing or yielded no repos, keyed by machine.
-    Catches e.g. an unmounted NFS share silently dropping repos."""
+    Catches e.g. an unmounted NFS share silently dropping repos.
+
+    Pass `config` and this also carries declared repos that did not come back
+    (see get_missing_repos), tagged `kind: "missing_repo"`. They ride THIS
+    channel rather than one of their own because this is the channel that is
+    already being read: the nightly digest's dashboard-health block loops over
+    /api/data's `root_warnings` and prints one ALERT line per entry, so a
+    finding that only a new consumer could see is a finding nobody would see
+    for as long as it took to teach that consumer about it. The reason text
+    leads with `missing:<repo>` so the digest line names the repo it is about.
+    /api/data also exposes them on their own under `missing_repos`.
+    """
     rows = conn.execute(
         "SELECT machine, path, exists_, found FROM machine_roots "
         "WHERE exists_=0 OR found=0 ORDER BY machine, path").fetchall()
     out = {}
     for r in rows:
         out.setdefault(r["machine"], []).append(
-            {"path": r["path"],
+            {"path": r["path"], "kind": "root",
              "reason": "missing" if not r["exists_"] else "no repos found"})
+    for machine, names in get_missing_repos(conn, config, now=now).items():
+        for nm in names:
+            out.setdefault(machine, []).append(
+                {"path": nm, "kind": "missing_repo",
+                 "reason": "missing:%s -- declared in expected_repos, "
+                           "not found by this scan" % nm})
     return out
 
 

@@ -151,3 +151,15 @@ targets:
     remote_python: python3
     roots:
       - { path: /, depth: 1 }
+    # What this machine is SUPPOSED to be carrying, checked against what the
+    # scan actually found. Every other check here reports on a repo that is
+    # there; a repo that drops out of scope (a moved path, a `depth` one level
+    # too shallow) produces no rows at all, which is also what a machine with
+    # nothing to report looks like. Declared, because "we saw it yesterday"
+    # cannot catch a root that was wrong from the day it was written.
+    # Names are repo directory basenames, matched case-insensitively. Omit the
+    # key to declare nothing; an unreachable machine never alarms here, since
+    # being down already explains the absence.
+    expected_repos:
+      - some-repo
+      - another-repo

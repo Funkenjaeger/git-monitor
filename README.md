@@ -71,6 +71,40 @@ large/vendored trees. See [config.example.yaml](config.example.yaml).
 (Note: browser saves are written by the container as root, so if you later edit
 the file over SSH you may need `sudo`.)
 
+### Repos a machine is supposed to have
+
+`roots` says where to look. It cannot say what has to come back, and an absent
+repo is the one thing every check here is otherwise blind to: a repo that falls
+out of scope -- a moved path, a `depth` set one level too shallow, a root that
+quietly stopped matching -- produces no rows, and no rows is exactly what a
+machine with nothing to report looks like too. On 2026-08-17 a Pi's only root
+was `{path: /, depth: 1}`, so a repo three levels down had never once been
+scanned; the dashboard reported the machine's other repo as having unpushed
+work and said nothing whatsoever about that one, which read as "it is fine".
+
+Declare what a machine must be carrying:
+
+```yaml
+  - name: pi
+    roots:
+      - { path: /, depth: 1 }
+    expected_repos:          # repo directory basenames, case-insensitive
+      - reflex-ui
+      - reflex-fw
+```
+
+Anything declared and not found is reported per machine as
+`missing:<repo> -- declared in expected_repos, not found by this scan`, on the
+machine card, in `/api/data` under `missing_repos`, and in that machine's
+`root_warnings` list -- the last so existing consumers that already alert on
+root warnings pick it up with no change.
+
+Omit the key to declare nothing; that is the default, and it is the honest one
+for a machine whose inventory you have not actually written down. An OFFLINE or
+off-hours machine never produces these: being unreachable already explains the
+absence, and alarming there would mean one false alarm per declared repo per
+cycle on every host that is merely powered off.
+
 ### Machines that are off part of the day
 
 The 2-failure debounce guards against a *blip*. A workstation that is powered

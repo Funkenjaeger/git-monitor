@@ -206,6 +206,15 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
         # Flag configured roots that are missing or yielded nothing (e.g. an
         # unmounted NFS share) so repos don't just silently disappear.
         for w in root_warnings.get(m["name"], []):
+            if w.get("kind") == "missing_repo":
+                # A declared repo that did not come back rides the same list
+                # (storage.get_root_warnings). It is not a root, so it must not
+                # be labelled one -- its reason already names the repo.
+                err += ('<div class="mwarn" title="expected_repos declares %s '
+                        'on this machine; the last scan did not find it">'
+                        '&#9888; %s</div>'
+                        % (esc(w["path"]), esc(w["reason"])))
+                continue
             err += ('<div class="mwarn" title="configured root %s: %s">'
                     '&#9888; root %s: %s</div>'
                     % (esc(w["path"]), esc(w["reason"]),

@@ -154,7 +154,9 @@ def index():
         machines = storage.get_machines(conn, cfg)
         repos = storage.get_repos(conn, cfg)
         commit_days = storage.get_commit_days(conn)
-        root_warnings = storage.get_root_warnings(conn)
+        # With the config, this also carries repos a target DECLARED and
+        # the scan did not find (storage.get_missing_repos).
+        root_warnings = storage.get_root_warnings(conn, cfg)
         repo_errors = storage.get_repo_errors(conn)
         project_tree = storage.get_projects(conn, cfg)
     finally:
@@ -190,7 +192,11 @@ def api_data():
             "machines": storage.get_machines(conn, cfg),
             "repos": storage.get_repos(conn, cfg),
             "commit_days": storage.get_commit_days(conn),
-            "root_warnings": storage.get_root_warnings(conn),
+            "root_warnings": storage.get_root_warnings(conn, cfg),
+            # Declared-but-absent repos, also folded into root_warnings
+            # above so the nightly digest's existing ALERT loop prints
+            # them without needing to learn this key first.
+            "missing_repos": storage.get_missing_repos(conn, cfg),
             "repo_errors": storage.get_repo_errors(conn),
             "projects": storage.get_projects(conn, cfg),
             "last_scan": _last_scan,

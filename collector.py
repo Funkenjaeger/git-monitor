@@ -286,6 +286,23 @@ def validate_config(cfg):
                     raise ValueError(
                         "target %s: precious_coverage entries must be a path "
                         "string or a {path, by} mapping" % name)
+        # Repos this machine is supposed to be carrying (see
+        # storage.get_missing_repos). Absent means "no opinion". An empty list
+        # is accepted and means the same thing -- unlike precious_coverage,
+        # where [] is a positive claim, there is nothing for "expected nothing"
+        # to assert.
+        exp = t.get("expected_repos")
+        if exp is not None:
+            if not isinstance(exp, list):
+                raise ValueError(
+                    "target %s: `expected_repos` must be a list of repo names "
+                    "(omit it entirely to declare nothing)" % name)
+            for e in exp:
+                if not isinstance(e, str) or not e.strip():
+                    raise ValueError(
+                        "target %s: expected_repos entries must be non-empty "
+                        "repo names, as scan.py reports them (the repo "
+                        "directory's basename)" % name)
         # Expected-online window (see uptime.py). Checked here because uptime
         # deliberately fails OPEN at scan time: a mistyped window is ignored
         # and everything keeps alerting exactly as before, which is the safe

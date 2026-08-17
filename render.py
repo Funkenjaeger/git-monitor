@@ -168,6 +168,43 @@ def _machine_sub(t):
     return " · ".join(parts)
 
 
+def _stale_warning(m):
+    """(label, hover text) for a machine whose snapshot has gone stale.
+
+    Three states, kept apart on purpose. "Never scanned" is not old data, it
+    is no data, and someone reading a card of zeroes needs to know which of
+    the two they are looking at; an unreadable timestamp is a third thing
+    again, and the one case where the age itself is unknown -- reported as
+    stale rather than quietly rounded to fresh."""
+    reason = m.get("stale_reason")
+    if reason == "never":
+        return ("stale -- never scanned successfully",
+                "no successful scan has ever been recorded for this machine, "
+                "so anything shown here is absent data, not old data")
+    if reason == "unreadable":
+        return ("stale -- last successful scan time unreadable",
+                "last_success is set to %s, which does not parse as a "
+                "timestamp; the age of this snapshot cannot be established, "
+                "so it is reported stale rather than assumed fresh"
+                % (m.get("last_success") or "?"))
+    age = m.get("snapshot_age_days") or 0
+    return ("stale -- last successful scan %s ago" % _days_text(age),
+            "the repos below are from the last SUCCESSFUL scan, %.1f days "
+            "ago, not from now -- they are a snapshot of what this machine "
+            "held then" % age)
+
+
+def _days_text(age):
+    """'4.2 days' / '1 day' / '14 days'. Tenths only while they still mean
+    something; nobody reads the .3 on a fortnight."""
+    if age >= 10:
+        return "%d days" % round(age)
+    if abs(age - round(age)) < 0.05:
+        n = int(round(age))
+        return "%d day%s" % (n, "" if n == 1 else "s")
+    return "%.1f days" % age
+
+
 def render_machines(machines, repos, root_warnings=None, repo_errors=None):
     root_warnings = root_warnings or {}
     repo_errors = repo_errors or {}
@@ -203,6 +240,17 @@ def render_machines(machines, repos, root_warnings=None, repo_errors=None):
             err += ('<div class="mwarn" title="expected_online: %s">&#9888; '
                     'expected-online window ignored</div>'
                     % esc(m["window_error"]))
+        # How old the data on this card is -- a different question from whether
+        # the machine is up, and printed even when the status dot is a perfectly
+        # calm "off-hours". An unreachable host keeps its last snapshot, so
+        # every repo row below stays on screen looking freshly observed; in
+        # Aug 2026 a desktop sat about two weeks off wired ethernet and this
+        # card, and the nightly digest reading it, called its git state current
+        # fact the whole time. (See storage.annotate_staleness.)
+        if m.get("stale"):
+            label, why = _stale_warning(m)
+            err += ('<div class="mwarn" title="%s">&#9888; %s</div>'
+                    % (esc(why), esc(label)))
         # Flag configured roots that are missing or yielded nothing (e.g. an
         # unmounted NFS share) so repos don't just silently disappear.
         for w in root_warnings.get(m["name"], []):

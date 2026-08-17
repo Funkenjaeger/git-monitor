@@ -9,6 +9,19 @@ scan_interval_minutes: 30      # background rescan cadence
 since_days: 365                # heatmap window
 top_n: 12                      # projects shown in the "Recent projects" list
 
+# Days a machine's last SUCCESSFUL scan may age before its card is labelled
+# STALE and it is counted in `stale_machines`. Default 3.
+#
+# An unreachable host keeps its last snapshot, so its repos keep being drawn as
+# though they had just been observed -- and `offline_machines` cannot cover
+# that, because a machine outside its expected_online window is deliberately
+# not counted there at all. Three days: long enough that a weekend, a holiday
+# Monday or a trip passes in silence, short enough that a fortnight cannot.
+# (A desktop spent about two weeks off the wire in Aug 2026 with nothing said.)
+# Unlike offline, this is measured against the clock alone -- an off-hours
+# machine with week-old data is still stale, and says so.
+stale_after_days: 3
+
 # Count only YOUR commits in the heatmap (case-insensitive patterns matched
 # against "Name <email>"). Omit to count all authors. List every name/email
 # you commit under — check with: git log --all --format='%an <%ae>' | sort -u

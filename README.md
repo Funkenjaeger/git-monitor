@@ -32,7 +32,9 @@ config.yaml ──► collector.py ──► scan.py (piped over SSH to each hos
   deliberately off overnight is not a fault: outside its window an unreachable
   target is not debounced, not counted offline and not reported as a failed
   scan, and the dashboard shows it as `off-hours`. See [Configuration](#configuration).
-- **storage.py** — sqlite. A successful scan replaces that machine's rows.
+- **storage.py** — sqlite. A successful scan replaces that machine's rows; a
+  failed one keeps them, so every machine also carries the age of its own
+  snapshot (`stale`, `snapshot_age_days`) to stop old data reading as current.
 - **signals.py** — the registry of everything the dashboard can say about a
   repo (dirty, unpushed, stashes, untracked, precious files, worktrees, no
   remote, unreadable, bare). Each is declared once and every other stage
@@ -140,6 +142,42 @@ alerts exactly as it would with no window at all, and the machine card says so;
 a save through `/config` refuses it outright. Timezone data comes from the
 `tzdata` package in requirements.txt, since neither python:slim nor Python on
 Windows ships one.
+
+### Data that has stopped arriving
+
+A host that cannot be reached keeps its last snapshot — deliberately, so a blip
+does not blank the dashboard. The cost is that its repos keep being drawn as
+though they had been observed just now, and nothing on the page distinguishes
+*this is how that machine looks* from *this is how that machine looked a
+fortnight ago*. `offline_machines` does not cover it: by design that counter
+ignores a machine outside its `expected_online` window, so the very host most
+likely to be unplugged for weeks — a workstation, off overnight, read by a
+consumer that runs at 01:07 — is the one it can never report. That is not
+hypothetical; a desktop sat about two weeks off wired ethernet in Aug 2026 and
+every nightly digest quoted its git state as current fact.
+
+Every machine therefore carries the age of its own snapshot, measured against
+the clock and nothing else:
+
+```yaml
+stale_after_days: 3        # top-level; default 3
+```
+
+Past that, `/api/data` reports `stale: true` and `snapshot_age_days` on the
+machine record, `stale_machines` counts it in the summary, and the machine card
+prints `⚠ stale -- last successful scan 4.2 days ago`. Three days is chosen to
+clear the longest ordinary silence (a weekend, a holiday Monday, a trip) while
+still catching a real absence inside the first week.
+
+**Stale and offline are independent.** An off-hours machine is behaving exactly
+as declared *and* its data can still be a week old; those are two different
+sentences, and staleness is gated on neither `reachable` nor `off_hours` —
+gating it on either would rebuild the blind spot it exists to close. A machine
+that has never been scanned successfully is stale with `snapshot_age_days:
+null` and `stale_reason: never` (absent data is not old data); an unreadable
+timestamp is `stale_reason: unreadable`, stale with an unknown age rather than
+silently fresh. Nothing is hidden — the snapshot is still the best information
+there is about that host, and the defect was only ever that it was unlabelled.
 
 ## Requirements on each monitored machine
 

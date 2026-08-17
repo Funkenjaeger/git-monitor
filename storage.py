@@ -256,6 +256,124 @@ def prune_machines(conn, keep_names):
                 conn.execute("DELETE FROM machines WHERE name=?", (row["name"],))
 
 
+# ---- snapshot age ----------------------------------------------------------
+
+# How old a machine's last SUCCESSFUL scan may get before its snapshot stops
+# being presented as current fact.
+#
+# Why three days. The number has to clear the longest ordinary silence -- a
+# weekend away, a long holiday Monday, a machine left off for a trip -- or the
+# warning fires on healthy setups and gets ignored, which is how the OFFLINE
+# label on a nightly-off desktop became worthless before `expected_online`
+# existed. It also has to be short enough that a real absence cannot run its
+# course unnoticed: the incident this exists for is a desktop that sat about
+# two weeks off wired ethernet in Aug 2026 while every nightly digest reported
+# its git state as current fact. Three days is the widest gap that still
+# catches that inside the first week.
+DEFAULT_STALE_AFTER_DAYS = 3
+
+
+def stale_after_days(config=None):
+    """The staleness threshold in days, read the same way app.py reads
+    `scan_interval_minutes` and collector.py reads `since_days`: a plain
+    top-level key with a default, coerced here so a hand-edited string
+    ("3") behaves like the number.
+
+    An unusable value falls back to the default rather than disabling the
+    check -- a threshold of 0 or less is not a threshold, it is an alarm that
+    fires on a machine scanned one second ago, and an alarm that always fires
+    is worth no more than one that never does.
+    """
+    try:
+        days = float((config or {}).get("stale_after_days",
+                                        DEFAULT_STALE_AFTER_DAYS))
+    except (TypeError, ValueError):
+        return float(DEFAULT_STALE_AFTER_DAYS)
+    if days <= 0:
+        return float(DEFAULT_STALE_AFTER_DAYS)
+    return days
+
+
+def _snapshot_age(last_success, now):
+    """(age_in_days, reason) for one machine's last successful scan.
+
+    reason is None when the timestamp parsed and the age is a real number;
+    otherwise the age is None and the reason says why:
+
+        "never"       no successful scan has ever been recorded
+        "unreadable"  a timestamp is stored and it does not parse
+
+    Both are stale, and neither is an age -- absent data is not old data, and
+    the card has to be able to say which it is looking at.
+    """
+    if not last_success:
+        return None, "never"
+    text = str(last_success)
+    try:
+        # storage.now_iso() writes UTC with a trailing Z, which fromisoformat
+        # rejects before 3.11; same swap render.rel_time makes.
+        t = datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except (TypeError, ValueError):
+        return None, "unreadable"
+    if t.tzinfo is None:
+        # No offset at all: UTC is the only reading that doesn't invent one.
+        t = t.replace(tzinfo=timezone.utc)
+    return (now - t).total_seconds() / 86400.0, None
+
+
+def annotate_staleness(machines, config=None, now=None):
+    """Tag machine rows with the age of their snapshot, in place.
+
+    Adds, on every row:
+        snapshot_age_days  days since the last SUCCESSFUL scan (float), or
+                           None when there is no usable timestamp
+        stale              True if that snapshot is older than the threshold
+        stale_reason       "aged" | "never" | "unreadable", or None when fresh
+
+    WHY THIS IS NOT A HEALTH CHECK. An unreachable machine keeps its last
+    snapshot (see save_scan / mark_unreachable), so every repo row it ever
+    produced keeps being served as though it had been observed just now.
+    `offline_machines` cannot cover that: it is deliberately blind to a
+    machine outside its expected-online window, and the desktop's window is
+    07:00-23:00 while the consumer that reads this runs at 01:07 -- so the one
+    host most likely to be unplugged for a fortnight is the one host that
+    counter can never report. In Aug 2026 that desktop sat about two weeks off
+    wired ethernet and nothing anywhere said so.
+
+    So staleness is measured against the CLOCK and nothing else. It is not
+    gated on `reachable`, and it is not gated on `off_hours`: a machine that
+    is off-hours is behaving exactly as declared AND its data can still be a
+    week old, and those are two different sentences. Gating this on either one
+    would rebuild the blind spot it closes.
+
+    Evaluated at READ time for the same reason uptime.annotate is: "how old is
+    this snapshot" has a different answer every hour, and the answer stored at
+    scan time is the one answer guaranteed to be wrong.
+
+    Nothing here hides or drops the stale machine's repos. The snapshot is
+    still the best information there is about that host; the defect was that
+    it was unlabelled, and a label is the whole fix.
+    """
+    if not machines:
+        return machines
+    limit = stale_after_days(config)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    for m in machines:
+        age, reason = _snapshot_age(m.get("last_success"), now)
+        m["snapshot_age_days"] = age
+        if reason is not None:          # never scanned, or an unreadable time
+            m["stale"] = True
+            m["stale_reason"] = reason
+        else:
+            m["stale"] = age > limit
+            m["stale_reason"] = "aged" if m["stale"] else None
+    return machines
+
+
 # ---- read side (used by the Flask app) -------------------------------------
 
 def get_machines(conn, config=None, now=None):
@@ -270,11 +388,17 @@ def get_machines(conn, config=None, now=None):
     the hour -- a machine that failed twice at 22:45 (inside its window, so
     genuinely OFFLINE) would still be shouting OFFLINE at 03:00, when nobody
     expects it to be up at all.
+
+    Snapshot age is annotated whether or not a config was passed (see
+    annotate_staleness): the config only carries the threshold, which has a
+    default, and "how old is this data" is a question a caller with no usable
+    config.yaml needs answered more than most.
     """
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM machines ORDER BY name").fetchall()]
     if config is not None:
         uptime.annotate(rows, config, now=now)
+    annotate_staleness(rows, config, now=now)
     return rows
 
 
@@ -465,6 +589,14 @@ def get_summary(conn, config=None, now=None):
     # this is the plain `not reachable` count it has always been.
     offline = sum(1 for m in machines
                   if not m["reachable"] and not m.get("off_hours"))
+    # Counted INDEPENDENTLY of the line above, not as a subset of it. Offline
+    # asks "is this machine up right now"; stale asks "how old is the data on
+    # the screen", and the second question is the one nobody was asking. A
+    # machine can be off-hours (and so, correctly, offline=0) while its
+    # snapshot is a fortnight old, or be down since this morning with data
+    # from an hour ago. A host may land in both counters, either, or neither;
+    # what it must not do is fall between them, which is what it did.
+    stale = sum(1 for m in machines if m.get("stale"))
     return {
         "total_repos": len(repos),
         "dirty_repos": n("dirty", "repos"),
@@ -486,5 +618,6 @@ def get_summary(conn, config=None, now=None):
         "unpushed_commits": n("unpushed", "total"),
         "machines": len(machines),
         "offline_machines": offline,
+        "stale_machines": stale,
         "signals": by_signal,
     }

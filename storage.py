@@ -270,6 +270,17 @@ def prune_machines(conn, keep_names):
 # two weeks off wired ethernet in Aug 2026 while every nightly digest reported
 # its git state as current fact. Three days is the widest gap that still
 # catches that inside the first week.
+# THIS IS THE SHARED ATTENTION HORIZON, NOT A LOCAL CHOICE. The same 3 days is
+# houston IMAGE_PIN_DRIFT_WARN_D, and the rationale is documented once in the
+# homelab wiki at docs/conventions.md, "The attention horizon: 3 days". Change
+# it there and follow the citations rather than editing one number in isolation.
+# That page also records the honest provenance: both constants were set to 3 on
+# 2026-08-17 hours apart by the same reasoning, so their agreement is NOT
+# independent confirmation -- it is one judgement applied twice, never
+# cross-checked. The page also draws the boundary this number keeps being
+# mistaken for: it is not an urgency threshold. A republished version-pinned
+# tag or a failed backup is a finding at zero days. This applies only where
+# being behind is normal and only being behind A WHILE is not.
 DEFAULT_STALE_AFTER_DAYS = 3
 
 

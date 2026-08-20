@@ -440,6 +440,8 @@ def get_repos(conn, config=None):
     if config is not None:
         import coverage
         coverage.annotate(rows, config)
+        import archived
+        archived.annotate(rows, config)
     return rows
 
 

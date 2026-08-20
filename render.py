@@ -643,7 +643,8 @@ button:disabled{opacity:.6;cursor:default;}
 .badge.clean{background:rgba(63,185,80,.12);color:var(--accent);}
 .badge.lead{background:rgba(63,185,80,.18);color:var(--accent);}
 .badge.diverged{background:rgba(248,81,73,.15);color:var(--alert);}
-.badge.bare,.badge.noremote{background:#21262d;color:var(--muted);}
+.badge.bare,.badge.noremote,.badge.archived{background:#21262d;color:var(--muted);}
+.badge.archdiverged{background:rgba(248,81,73,.15);color:var(--alert);}
 .badge.err{background:rgba(248,81,73,.22);color:var(--alert);}
 /* A roll-up chip: this is true of a copy the collapsed row isn't showing. Same
    colour as the chip it stands for, dashed so it reads as a pointer rather

@@ -56,6 +56,26 @@ precious_patterns:
 # real declaration -- "nothing on this machine is backed up" -- and yields
 # orphaned, which is what you want for a laptop or a Pi with no backup.
 
+# A project that will never be pushed to the remote `unpushed` measures
+# against -- e.g. a repo frozen mid-migration, pushed only to an internal
+# mirror by standing decision -- pins its expected tip here so the alarm can
+# go quiet instead of permanently red. Keyed by remote URL (any spelling;
+# normalized the same way project rows are collapsed across machines), so ONE
+# entry covers every machine's copy of that project. Value is the commit the
+# project was frozen at (full or short SHA).
+#
+#   at that tip   -- `unpushed` is suppressed; an "archived" chip renders
+#                     instead (muted, informational -- this is expected).
+#   past that tip -- `unpushed` renders as normal AND a loud "moved since
+#                     archived" chip calls it out: something landed on a
+#                     copy that was supposed to be frozen.
+#
+# Omit entirely, or omit a project from the map, to leave `unpushed` behaving
+# exactly as it does with no `archived:` key at all.
+#
+# archived:
+#   github.com/your-org/frozen-repo: 1a2b3c4
+
 # SSH defaults applied to every remote target (override per-target if needed).
 remote_python: python3         # interpreter name on the remote host
 connect_timeout: 8             # seconds before a host is treated as offline

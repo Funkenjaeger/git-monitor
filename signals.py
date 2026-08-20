@@ -244,6 +244,51 @@ class Precious(ListSignal):
         return self.tip_lead + self._plist(r)
 
 
+class ArchivableCount(CountSignal):
+    """A CountSignal that goes quiet when the repo is a confirmed, undiverged
+    archive (see archived.py) -- the count is still true, it is simply no
+    longer the thing worth alarming about. A diverged or undeclared repo
+    behaves exactly like a plain CountSignal; nothing changes for it. Built
+    for `unpushed`, but general over anything else that later needs the same
+    "declared frozen, suppress the count" treatment."""
+
+    def _suppressed(self, r):
+        return bool(r.get("archived_pinned")) and not r.get("archived_diverged")
+
+    def fires(self, r):
+        return not self._suppressed(r) and super().fires(r)
+
+    def count(self, r):
+        return 0 if self._suppressed(r) else super().count(r)
+
+
+class Archived(FlagSignal):
+    """A copy of a project this estate has declared frozen, at its pinned
+    tip. Informational -- like Bare, this describes what the copy IS, not
+    something wrong with it. See archived.py."""
+
+    stored = None
+    problem = False
+    card = False
+    cls = "archived"
+    word = "archived"
+    suffix = " &#10003;"
+
+
+class ArchivedDiverged(FlagSignal):
+    """A commit landed on a copy that was declared frozen. Louder than the
+    plain `unpushed` count it accompanies (which still fires normally --
+    see ArchivableCount) -- this names the specific, more surprising fact:
+    something moved on a repo everyone stopped watching. See archived.py."""
+
+    stored = None
+    cls = "archdiverged"
+    word = "moved since archived"
+    plural = "moved since archived"
+    card_label = "archived, moved"
+    prefix = "&#9888; "
+
+
 class NoRemote(FlagSignal):
     """Nowhere to push. `unpushed` is structurally 0 for such a repo, so it
     reads as clean while being the one kind with no off-machine copy of its
@@ -296,8 +341,13 @@ SIGNALS = (
     # A linked worktree can carry its own uncommitted or unpushed work that
     # nothing above will ever see from this checkout's side.
     CountSignal("worktrees", cls="worktree", word="worktree", plural="worktrees"),
-    CountSignal("unpushed", cls="unpushed", word="unpushed", card_always=True),
+    # A commit landing on a repo declared frozen is a sharper fact than a
+    # rising unpushed count, so it renders just before it.
+    ArchivedDiverged("archived_diverged"),
+    ArchivableCount("unpushed", cls="unpushed", word="unpushed", card_always=True),
     NoRemote("has_remote"),
+    # Informational "what this copy is" chips, same shelf as Bare.
+    Archived("archived_pinned"),
     Bare("is_bare"),
 )
 

@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import archived
 import coverage
 import projects
 import render
@@ -118,9 +119,9 @@ class ScanFieldsAreClassified(unittest.TestCase):
                 key, scan.REPO_FIELDS,
                 "signal %r has a DB column but scan.py never produces it" % key)
 
-    def test_derived_signals_are_the_coverage_buckets(self):
+    def test_derived_signals_are_the_coverage_and_archived_buckets(self):
         derived = {s.key for s in signals.SIGNALS if not s.stored}
-        self.assertEqual(derived, set(coverage.FIELDS))
+        self.assertEqual(derived, set(coverage.FIELDS) | set(archived.FIELDS))
 
 
 class StoredSignalsSurviveTheDatabase(unittest.TestCase):
@@ -283,6 +284,136 @@ class EverySignalCanDrawItself(unittest.TestCase):
             self.assertEqual(totals[s.key],
                              s.count(r) if s.card_unit == "items" else 1,
                              "machine cards don't count %r" % s.key)
+
+
+class ArchivedSuppressesUnpushed(unittest.TestCase):
+    """A repo declared archived at its current tip should stop reading as
+    "N unpushed" (permanent noise the four reflex-ui/reflex-fw rows can never
+    clear, task 6a847258) and start reading as "archived". A repo declared
+    archived that has MOVED PAST its pin must do the opposite of go quiet --
+    that is a new commit landing on something everyone stopped watching."""
+
+    ORIGIN = "git@github.com:Funkenjaeger/reflex-ui.git"
+    CONFIG = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"}}
+
+    def _repo(self, head_sha, **over):
+        return repo(remotes={"origin": self.ORIGIN}, head_sha=head_sha,
+                    unpushed=6, **over)
+
+    def test_pinned_and_matching_suppresses_unpushed(self):
+        r = self._repo("1a2b3c4d5e6f")           # full sha, config has short
+        archived.annotate([r], self.CONFIG)
+        unpushed = signals.by_key("unpushed")
+        arch = signals.by_key("archived_pinned")
+        diverged = signals.by_key("archived_diverged")
+        self.assertFalse(unpushed.fires(r), "unpushed still fires on a pinned, "
+                         "undiverged archive -- the row will still read as "
+                         "permanent noise")
+        self.assertEqual(unpushed.count(r), 0)
+        self.assertTrue(arch.fires(r))
+        self.assertFalse(diverged.fires(r))
+
+    def test_pinned_and_diverged_stays_loud(self):
+        r = self._repo("deadbeef0000")           # does not match the pin at all
+        archived.annotate([r], self.CONFIG)
+        unpushed = signals.by_key("unpushed")
+        diverged = signals.by_key("archived_diverged")
+        self.assertTrue(unpushed.fires(r), "a repo that moved past its pin "
+                        "must not have its unpushed count silenced")
+        self.assertEqual(unpushed.count(r), 6)
+        self.assertTrue(diverged.fires(r), "moving past the pin must raise "
+                        "the loud chip, not just leave unpushed alone")
+
+    def test_missing_head_sha_reads_as_diverged_not_clean(self):
+        r = self._repo(None)
+        archived.annotate([r], self.CONFIG)
+        self.assertTrue(r["archived_diverged"], "an unconfirmed HEAD must "
+                        "never render as the quiet, confirmed-clean case")
+
+    def test_undeclared_project_is_untouched(self):
+        r = repo(remotes={"origin": "git@github.com:x/y.git"},
+                 head_sha="1a2b3c4d5e6f", unpushed=6)
+        archived.annotate([r], self.CONFIG)
+        self.assertFalse(r["archived_pinned"])
+        self.assertFalse(r["archived_diverged"])
+        self.assertEqual(signals.by_key("unpushed").count(r), 6)
+
+    def test_declared_ONE_entry_per_project_covers_every_machine(self):
+        # desktop and elspi normalize the same origin URL to the same key --
+        # the whole point being one config line covers both machines' copies.
+        desktop = repo(remotes={"origin": "https://github.com/Funkenjaeger/reflex-ui"},
+                       head_sha="1a2b3c4d", unpushed=6)
+        elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="1a2b3c4d", unpushed=6)
+        archived.annotate([desktop, elspi], self.CONFIG)
+        self.assertTrue(desktop["archived_pinned"])
+        self.assertTrue(elspi["archived_pinned"])
+
+    def test_per_target_pin_overrides_the_global_map(self):
+        cfg = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"},
+               "targets": [{"name": "elspi",
+                            "archived": {"github.com/Funkenjaeger/reflex-ui": "89b09bb"}}]}
+        r = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
+                 unpushed=6, machine="elspi")
+        archived.annotate([r], cfg)
+        self.assertTrue(r["archived_pinned"])
+        self.assertFalse(r["archived_diverged"], "elspi's own pin must win over "
+                         "the global map for elspi's copy")
+
+    def test_two_copies_on_different_branches_are_both_quiet(self):
+        """The case this whole per-target change exists for: one project, two
+        machines, two different HEADs. Under a single global pin exactly one of
+        them renders the loud archived_diverged chip, falsely."""
+        cfg = {"targets": [
+            {"name": "desktop",
+             "archived": {"github.com/Funkenjaeger/reflex-ui": "96bb910"}},
+            {"name": "elspi",
+             "archived": {"github.com/Funkenjaeger/reflex-ui": "89b09bb"}}]}
+        desktop = repo(remotes={"origin": self.ORIGIN}, head_sha="96bb910dcfca",
+                       unpushed=10, machine="desktop")
+        elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
+                     unpushed=6, machine="elspi")
+        archived.annotate([desktop, elspi], cfg)
+        unpushed = signals.by_key("unpushed")
+        for r, name in ((desktop, "desktop"), (elspi, "elspi")):
+            self.assertTrue(r["archived_pinned"], "%s not pinned" % name)
+            self.assertFalse(r["archived_diverged"],
+                             "%s reads as diverged -- a false 'commit landed on "
+                             "a frozen archive'" % name)
+            self.assertFalse(unpushed.fires(r), "%s still permanent noise" % name)
+
+    def test_one_machines_pin_does_not_leak_to_another(self):
+        """A pin declared for desktop must not silence elspi's copy, or the
+        loud case stops being reachable at all."""
+        cfg = {"targets": [{"name": "desktop",
+                            "archived": {"github.com/Funkenjaeger/reflex-ui": "96bb910"}}]}
+        elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
+                     unpushed=6, machine="elspi")
+        archived.annotate([elspi], cfg)
+        self.assertFalse(elspi["archived_pinned"], "desktop's pin leaked to elspi")
+        self.assertEqual(signals.by_key("unpushed").count(elspi), 6)
+
+    def test_global_map_still_covers_a_machine_with_no_target_entry(self):
+        cfg = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"},
+               "targets": [{"name": "desktop",
+                            "archived": {"github.com/Funkenjaeger/reflex-fw": "64f033a"}}]}
+        r = repo(remotes={"origin": self.ORIGIN}, head_sha="1a2b3c4d5e6f",
+                 unpushed=6, machine="desktop")
+        archived.annotate([r], cfg)
+        self.assertTrue(r["archived_pinned"], "the global fallback was dropped")
+        self.assertFalse(r["archived_diverged"])
+
+    def test_annotate_wires_through_get_repos(self):
+        d = tempfile.mkdtemp()
+        try:
+            conn = storage.connect(os.path.join(d, "t.db"))
+            row = self._repo("1a2b3c4d5e6f")
+            storage.save_scan(conn, "desktop", "ssh", "python3", {"repos": [row]})
+            [back] = storage.get_repos(conn, self.CONFIG)
+            self.assertTrue(back["archived_pinned"])
+            self.assertFalse(back["archived_diverged"])
+            conn.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class RelativeTimes(unittest.TestCase):

@@ -88,16 +88,44 @@ def missing_alarms(warnings, machine="elspi"):
     return [w for w in warnings.get(machine, []) if w.get("kind") == "missing_repo"]
 
 
-def digest_line(machine, w):
-    """The line the nightly digest would print for this warning.
+# The format string the nightly digest uses for a root warning. It lives in
+# ol-control/collect.sh, which is NOT part of this repo, so it has to be
+# transcribed here -- but transcribing it and then asserting against the
+# transcription is a test that cannot fail, which is exactly the defect the
+# 2026-08-27 probe audit named (and exactly how houston sat 1-of-26 red for
+# five days). So the transcription is checked against the real file by
+# test_the_transcribed_digest_format_still_matches_collect_sh below.
+DIGEST_FMT = "   ALERT  root warning %s:%s -- %s"
 
-    A verbatim copy of the format string in ol-control/collect.sh's
-    dashboard-health block (the one that emits `ALERT unpushed:<repo>` a few
-    lines further down). Copied rather than imported because that file is not
-    part of this repo; if it is ever reworded this assertion is the thing that
-    notices the wording it was written against is gone.
+# Where the real one lives. Overridable so this is runnable off dserver.
+COLLECT_SH = os.environ.get(
+    "COLLECT_SH", os.path.expanduser("~/ol-control/collect.sh"))
+
+
+def real_digest_fmt(path=None):
+    """Extract the root-warning format string from the live collect.sh.
+
+    Returns None if the file cannot be read -- the caller must treat that as
+    UNKNOWN and say so, never as agreement.
     """
-    return "   ALERT  root warning %s:%s -- %s" % (machine, w.get("path"), w.get("reason"))
+    p = path or COLLECT_SH
+    try:
+        src = open(p, encoding="utf-8").read()
+    except (IOError, OSError):
+        return None
+    for line in src.splitlines():
+        s = line.strip()
+        if s.startswith("print(") and "root warning" in s:
+            first = s.find('"')
+            last = s.find('"', first + 1)
+            if first != -1 and last != -1:
+                return s[first + 1:last]
+    return ""
+
+
+def digest_line(machine, w):
+    """The line the nightly digest would print for this warning."""
+    return DIGEST_FMT % (machine, w.get("path"), w.get("reason"))
 
 
 class Base(unittest.TestCase):
@@ -334,3 +362,62 @@ class ConfigValidation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TranscribedFormatStillMatchesReality(unittest.TestCase):
+    """The anti-encoding guard for this file.
+
+    `DIGEST_FMT` is a copy of a string that lives in another repo. A copy that
+    nothing compares against is not evidence -- it is a second opinion that
+    always agrees with itself. This is the only test here that can notice the
+    original moved.
+
+    Added 2026-08-28 after the probe audit classified this file ENCODES-RISKY.
+    Verified at the time: the transcription was IDENTICAL to collect.sh:578,
+    so this went green on a real comparison, not on a vacuous one.
+    """
+
+    def test_the_transcribed_digest_format_still_matches_collect_sh(self):
+        real = real_digest_fmt()
+        if real is None:
+            self.skipTest(
+                "UNKNOWN: cannot read %s from here, so the transcribed "
+                "DIGEST_FMT was NOT verified against the original. This is a "
+                "wrong-vantage-point skip, not a pass -- re-run on dserver, or "
+                "set COLLECT_SH." % COLLECT_SH)
+        self.assertNotEqual(
+            real, "",
+            "found %s but no root-warning print() in it -- either the block "
+            "was removed or its shape changed; DIGEST_FMT is now unanchored"
+            % COLLECT_SH)
+        self.assertEqual(
+            real, DIGEST_FMT,
+            "collect.sh's root-warning format has been reworded.\n"
+            "  collect.sh: %r\n  this file:  %r\n"
+            "Update DIGEST_FMT to match, and re-check any assertion that "
+            "depends on the wording." % (real, DIGEST_FMT))
+
+    def test_the_extractor_itself_can_fail(self):
+        """Positive control for the guard above.
+
+        A guard whose extractor silently returns the expected answer on any
+        input would make the real test vacuous. Point it at a file with no
+        such line and at a file that does not exist, and require it to say so
+        differently in each case.
+        """
+        import tempfile as _tf
+        d = _tf.mkdtemp()
+        try:
+            empty = os.path.join(d, "no-such-block.sh")
+            open(empty, "w", encoding="utf-8").write("#!/bin/sh\necho hi\n")
+            self.assertEqual(real_digest_fmt(empty), "",
+                             "a file with no root-warning line must yield ''")
+            self.assertIsNone(real_digest_fmt(os.path.join(d, "absent.sh")),
+                              "an unreadable file must yield None, not ''")
+            # And it must actually FIND one when present.
+            good = os.path.join(d, "good.sh")
+            open(good, "w", encoding="utf-8").write(
+                '        print("   ALERT  root warning %s:%s -- %s" % (a, b, c))\n')
+            self.assertEqual(real_digest_fmt(good), DIGEST_FMT)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

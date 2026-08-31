@@ -140,7 +140,7 @@ def gated(fn):
         # its prefix through timing.
         if not hmac.compare_digest(request.headers.get(GATE_HEADER, ""), GATE_SECRET):
             abort(403, "the control plane is reachable only through lanauth "
-                       "(https://gitmonitor.funkenjaeger.net)")
+                       "(https://gitmonitor.dudzik.app)")
         return fn(*args, **kwargs)
     return wrapper
 

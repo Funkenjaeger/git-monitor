@@ -99,6 +99,7 @@ REPO_FIELDS = (
     "last_commit", "commit_days",
     "head_sha", "root_key", "branch_tips", "branch_dates", "lineage",
     "remotes", "unpushed_by_remote",
+    "worktree_note",
 )
 #: Of those, the ones that default to an empty dict rather than None.
 DICT_FIELDS = ("commit_days", "branch_tips", "branch_dates", "lineage",
@@ -117,6 +118,120 @@ def is_worktree_repo(d):
 def is_bare_repo(d):
     # A bare repo is itself the git dir: HEAD + objects/ + refs/ at the top.
     return all(os.path.exists(os.path.join(d, x)) for x in ("HEAD", "objects", "refs"))
+
+
+def is_primary_worktree(path):
+    """The worktree whose `.git` is a real directory, not the small
+    gitdir-pointer FILE `git worktree add` leaves in a linked one (the same
+    distinction is_worktree_repo already reads, since it deliberately accepts
+    either). Picking this one as the row that carries shared-store signals
+    keeps the dashboard's naming stable across scans: whichever checkout
+    started life as `git clone`/`git init` keeps the name, instead of it
+    flipping between "reflex" and "reflex-bl" depending on directory walk
+    order.
+    """
+    return os.path.isdir(os.path.join(path, ".git"))
+
+
+# Signals whose value lives in the shared object store (refs, refs/stash, the
+# object database) rather than in one checkout's index or working tree.
+# Verified against a real `git worktree add` fixture (git 2.43): `git
+# rev-list --branches HEAD --not --remotes` (unpushed / unpushed_by_remote)
+# and `git stash list` (stashes) read refs that live in the *common* git dir,
+# so every worktree sharing that common dir reports the identical number --
+# not a coincidence, the same ref read from two directories. `dirty`,
+# `untracked` and `precious_files` are deliberately NOT here: those come from
+# `git status`/`ls-files` against the worktree's own index and working tree,
+# which genuinely differs checkout to checkout (that's the whole point of a
+# linked worktree). `ahead`/`behind` and `head_sha`/`branch`/`last_commit`
+# aren't here either -- they describe the branch currently checked out in
+# THIS worktree, which a linked worktree is free to have pointed somewhere
+# else entirely.
+SHARED_STORE_SIGNALS = ("unpushed", "unpushed_by_remote", "stashes")
+#: Of those, the ones worth naming in a linked worktree's folded-in note.
+#: (unpushed_by_remote is a per-remote breakdown of `unpushed`, already
+#: implied by it, so it is zeroed but not separately narrated.)
+_NOTEWORTHY_SHARED_SIGNALS = ("unpushed", "stashes")
+
+
+def git_common_dir(path):
+    """Absolute, normalized path to the git dir this checkout's objects and
+    refs actually live in -- identical for every worktree sharing one object
+    store. None if git can't answer (not a repo, unreadable, etc).
+
+    `git rev-parse --git-common-dir` prints a path relative to `path` itself
+    when that checkout's own .git IS the common dir (the primary worktree),
+    and an absolute path otherwise (a linked worktree, pointed elsewhere) --
+    both observed directly against git 2.43. Normalizing here means callers
+    never have to care which case they got.
+    """
+    ok, out = run_git(["rev-parse", "--git-common-dir"], cwd=path)
+    if not ok:
+        return None
+    gd = out.strip().splitlines()[0] if out.strip() else ""
+    if not gd:
+        return None
+    if not os.path.isabs(gd):
+        gd = os.path.join(path, gd)
+    return norm(gd)
+
+
+def dedupe_shared_worktrees(repos):
+    """Collapse shared-object-store signals of linked worktrees onto their
+    primary worktree, in place.
+
+    scan.py already understands worktrees: is_worktree_repo() accepts a
+    `.git` FILE as well as a directory, and collect_repo() already asks `git
+    worktree list` how many other checkouts share this one's store. What
+    nothing here noticed until now is when TWO of the scan's OWN top-level
+    results are two names for that one store: a depth-2 walk over
+    C:/projects enumerates a repo's main checkout and each linked worktree as
+    separate directories, so a signal that actually lives in the shared
+    object store -- not in either checkout's working tree -- gets reported
+    once under each name. On 2026-09-08 that was reflex (main worktree,
+    branch integration) and reflex-bl (linked worktree): byte-identical
+    `unpushed` detail under two rows.
+
+    Repos with no shared common-dir -- independent clones, bare mirrors, a
+    repo git could not read -- are left alone, including when two
+    independent repos each happen to carry unpushed work: they group under
+    two different common-dirs and never touch each other.
+    """
+    groups = {}
+    for r in repos:
+        if r.get("is_bare") or r.get("error"):
+            continue
+        cd = git_common_dir(r["path"])
+        if not cd:
+            continue
+        groups.setdefault(cd, []).append(r)
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        primaries = [m for m in members if is_primary_worktree(m["path"])]
+        # Deterministic even in the pathological case of none or several
+        # "primaries": sort by path so a repeated scan of the same layout
+        # never flips which row the dashboard names.
+        primary = primaries[0] if primaries else sorted(members, key=lambda m: m["path"])[0]
+
+        folded = []
+        for m in members:
+            if m is primary:
+                continue
+            phrase_parts = []
+            for key in SHARED_STORE_SIGNALS:
+                val = m.get(key)
+                if not val:
+                    continue
+                m[key] = {} if key in DICT_FIELDS else 0
+                if key in _NOTEWORTHY_SHARED_SIGNALS:
+                    phrase_parts.append("%d %s" % (val, key))
+            if phrase_parts:
+                folded.append("%s: %s" % (m["name"], ", ".join(phrase_parts)))
+
+        if folded:
+            primary["worktree_note"] = "; ".join(folded) + " (shared object store)"
 
 
 def find_repos(root_path, depth, bare, exclude):
@@ -413,8 +528,12 @@ def load_config(argv):
     return cfg, pretty
 
 
-def main():
-    cfg, pretty = load_config(sys.argv)
+def scan(cfg):
+    """Run one scan for the given config dict and return the result dict
+    (pre-serialization). Factored out of main() so tests can drive a real
+    fixture through find_repos/collect_repo/dedupe_shared_worktrees without
+    going through argv/stdin parsing or stdout.
+    """
     since_days = int(cfg.get("since_days", 365))
     authors = cfg.get("authors") or []
     precious_patterns = cfg.get("precious_patterns") or []
@@ -467,6 +586,13 @@ def main():
         result["repos"].append(collect_repo(
             path, bare, since_days, authors, precious_patterns))
 
+    dedupe_shared_worktrees(result["repos"])
+    return result
+
+
+def main():
+    cfg, pretty = load_config(sys.argv)
+    result = scan(cfg)
     text = json.dumps(result, indent=2 if pretty else None, sort_keys=pretty)
     sys.stdout.write(text + "\n")
 

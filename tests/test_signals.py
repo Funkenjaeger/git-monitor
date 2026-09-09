@@ -102,6 +102,13 @@ class ScanFieldsAreClassified(unittest.TestCase):
         "branch_tips", "branch_dates", "lineage",   # cross-copy comparison
         "remotes", "unpushed_by_remote",    # backup-target labelling
         "precious_files",                   # raw input to the coverage buckets
+        "worktree_note",                    # raw note: what a linked worktree's
+                                             # shared-store signals were folded
+                                             # into this row (see scan.py's
+                                             # dedupe_shared_worktrees); the
+                                             # `worktrees` chip is what renders,
+                                             # this is its detail text, not its
+                                             # own chip
     }
 
     def test_every_scanned_field_is_a_signal_or_declared_not_to_be(self):

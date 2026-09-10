@@ -17,6 +17,7 @@ Run standalone:  python collector.py --config config.yaml --db data.db --once
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -180,6 +181,68 @@ def run_remote(target, scan_cfg, defaults):
     return json.loads(out)
 
 
+def local_scan_py_sha256():
+    """sha256 of the collector's OWN scan.py, the copy that would be piped
+    to a `piped` target. Read fresh each call (not cached at import time) so
+    a scratch clone editing scan.py mid-test-run sees the new bytes."""
+    with open(SCAN_PY, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def scan_py_version_signal(target, defaults, result):
+    """Compare an `installed` target's self-reported scan.py hash (see
+    scan.py's `_self_sha256` / the `scan_py_sha256` payload key) against
+    this collector's own copy. Returns one of:
+
+        None        -- not applicable ("piped"/"local" target), or an
+                        `installed` target whose hash MATCHES.
+        "mismatch"  -- an `installed` target is running a DIFFERENT copy of
+                        scan.py than this collector has. This is the actual
+                        motivating bug: e7f8a75 landed on dserver and reached
+                        every piped target immediately while the desktop --
+                        `remote_script: installed`, fronted by the Windows
+                        sshd ForceCommand wrapper that execs its own copy at
+                        C:\\ProgramData\\ssh\\git-monitor-scan.py and never
+                        reads stdin -- kept running its 2026-08-02 copy with
+                        nothing anywhere noticing.
+        "unknown"   -- an `installed` target reported NO `scan_py_sha256` at
+                        all. Deliberately NOT folded into the None/"match"
+                        case: an old scanner (exactly the thing that was
+                        silently stale above) predates this field and so
+                        cannot report it, which is precisely the case this
+                        check exists to catch. Treating silence as agreement
+                        would make the check blind to its own motivating
+                        example.
+
+    A `piped` target is NEVER compared, deliberately: the collector supplies
+    scan.py's own bytes over stdin for that target (see run_remote), so its
+    hash agreeing is guaranteed by construction and a comparison there is
+    circular. Doing it anyway would earn nothing and, the moment `scan.py`
+    is ever fed through anything that alters bytes in flight (line-ending
+    translation, an intervening shell), would produce a false alarm on every
+    piped host -- worse than the gap this exists to close.
+    """
+    remote_script = target.get("remote_script", defaults.get("remote_script", "piped"))
+    if remote_script != "installed":
+        return None
+    reported = result.get("scan_py_sha256")
+    if not reported:
+        return "unknown"
+    if reported != local_scan_py_sha256():
+        return "mismatch"
+    return None
+
+
+_VERSION_SIGNAL_MESSAGE = {
+    "mismatch": "scan.py version mismatch -- this `installed` target is "
+                "running a different scan.py than this collector's own "
+                "copy (patches piped to other targets will not reach it)",
+    "unknown": "scan.py version unknown -- this `installed` target reported "
+               "no scan_py_sha256 (an old scanner that predates this "
+               "check, most likely)",
+}
+
+
 def scan_target(target, defaults):
     """Scan one target WITHOUT touching the DB. Returns (ok, result_or_error)."""
     ssh = target.get("ssh", "local")
@@ -205,12 +268,25 @@ def collect_one(conn, target, defaults):
     The scan is still ATTEMPTED off-hours rather than skipped. A machine that
     happens to be up at 02:00 then gets its repos refreshed for free, and the
     unreachable path stays the single place where a failure is judged.
+
+    A successful scan is also checked for scan.py version skew (see
+    scan_py_version_signal): an `installed` target running a different copy
+    of scan.py than this collector prints a warning to stderr. That check is
+    done here, not folded into `ok`/`status`, deliberately -- it is a fact
+    about the SCANNER, not about the repos it found, and turning it into a
+    third kind of failure would force every existing caller of collect_one/
+    collect_all (this module's own main(), and app.py's run_scan) to learn a
+    new return shape for a signal neither currently asks about.
     """
     name = target["name"]
     ssh = target.get("ssh", "local")
     remote_python = target.get("remote_python", defaults.get("remote_python", "python3"))
     ok, result = scan_target(target, defaults)
     if ok:
+        sig = scan_py_version_signal(target, defaults, result)
+        if sig:
+            print("[WARN] %-12s %s" % (name, _VERSION_SIGNAL_MESSAGE[sig]),
+                  file=sys.stderr)
         storage.save_scan(conn, name, ssh, remote_python, result)
         return True, len(result.get("repos", [])), "ok"
     expected_offline = uptime.off_hours(target, defaults)

@@ -39,6 +39,7 @@ Add --pretty for indented output when testing by hand.
 
 import base64
 import fnmatch
+import hashlib
 import json
 import os
 import subprocess
@@ -543,6 +544,13 @@ def scan(cfg):
         "machine": cfg.get("machine"),
         "host": _hostname(),
         "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # Self-identifying version of the copy of scan.py that actually
+        # produced this payload -- see _self_sha256(). None on the piped
+        # path (nothing on disk to hash there); collector.py only ever
+        # compares this for an `installed` target, where it names a real
+        # file. A top-level payload key, not a REPO_FIELDS entry, so it
+        # carries no signals.py/storage.py obligation.
+        "scan_py_sha256": _self_sha256(),
         "repos": [],
         "roots": [],
         "errors": [],
@@ -603,6 +611,37 @@ def _hostname():
         return platform.node()
     except Exception:
         return ""
+
+
+def _self_sha256():
+    """sha256 of this script's own source, read off __file__.
+
+    This is the version-skew fix: an `installed` target (see collector.py's
+    run_remote / the `remote_script` comment there) execs some OTHER copy of
+    scan.py than the one the collector would have piped, and nothing on the
+    piped path notices when the two drift -- a patch reaches every piped
+    target silently and the installed one just keeps running whatever was
+    last hand-deployed. Putting a hash of the running copy's own bytes in the
+    payload it already returns lets collector.py catch that without a new
+    channel through the ForceCommand wrapper (see collector.py's comparison).
+
+    None -- not raised, not "" -- when __file__ doesn't name a real file on
+    disk. That covers the piped path deliberately: there, scan.py is fed to
+    `<python> -` over stdin (see run_remote), and CPython sets
+    `__file__ == "<stdin>"` for a script read that way (confirmed by hand:
+    `cat scan.py | python3 -` prints "<stdin>", not a path) -- there is
+    nothing on disk to hash. Collector-side, a piped target is never compared
+    at all (its hash agrees by construction, since the collector supplies the
+    bytes), so this returning None there is inert, not load-bearing; the
+    `installed` desktop case is what depends on __file__ being real, and it
+    is: the ForceCommand wrapper execs a real file path
+    (C:\\ProgramData\\ssh\\git-monitor-scan.py), not stdin.
+    """
+    try:
+        with open(__file__, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
 
 
 if __name__ == "__main__":

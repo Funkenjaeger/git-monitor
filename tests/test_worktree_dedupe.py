@@ -53,9 +53,17 @@ GIT_ENV.update({
 })
 
 
-def _git(args, cwd):
+def _git(args, cwd, when=None):
+    """`when` pins GIT_AUTHOR_DATE/GIT_COMMITTER_DATE for this one command.
+    The lineage fixture below needs branches whose committerdate ORDER is
+    unambiguous; without it every commit in a fast test lands in the same
+    second and `for-each-ref --sort=-committerdate` ties arbitrarily."""
+    env = GIT_ENV
+    if when is not None:
+        env = dict(GIT_ENV)
+        env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = when
     proc = subprocess.run(
-        ["git"] + args, cwd=cwd, env=GIT_ENV,
+        ["git"] + args, cwd=cwd, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20,
     )
     if proc.returncode != 0:
@@ -194,6 +202,148 @@ class WorktreeDedupe(unittest.TestCase):
                 by_name[name].get("worktree_note"),
                 "a repo with no shared worktree has nothing to note")
 
+    # -- (5) branch_tips: the duplicate ol-control's collect.sh actually reads
+
+    def test_shared_branch_tips_reported_once_on_primary(self):
+        """The 2026-09-11 gap. `unpushed` was deduped on 2026-09-08, but
+        ol-control's collect.sh (:754) builds its unpushed row from
+        branch_tips and skips a repo whose tips are empty, so the linked
+        worktree kept producing a twin row -- with the ahead-count missing
+        (:816's fallback), which is what made it look like a different bug."""
+        root, main_wt, linked_wt = self._make_shared_pair()
+        _result, by_name = self._scan(root)
+        main_name = os.path.basename(main_wt)
+        linked_name = os.path.basename(linked_wt)
+
+        self.assertTrue(
+            by_name[main_name]["branch_tips"],
+            "the primary worktree must keep the shared refs it can see")
+        self.assertEqual(
+            by_name[linked_name]["branch_tips"], {},
+            "refs/heads lives in the COMMON git dir: the linked worktree "
+            "reads the identical tips, so reporting them again is a "
+            "duplicate row downstream, not a second fact")
+
+    def test_shared_branch_dates_and_commit_days_reported_once(self):
+        """branch_dates rides the same `for-each-ref` as branch_tips.
+        commit_days is `git log --all` over the shared object store, and
+        storage.get_commit_days() sums it across every repo -- so a linked
+        worktree double-counted every commit in the dashboard heatmap."""
+        root, main_wt, linked_wt = self._make_shared_pair()
+        _result, by_name = self._scan(root)
+        main_name = os.path.basename(main_wt)
+        linked_name = os.path.basename(linked_wt)
+
+        for field in ("branch_dates", "commit_days"):
+            self.assertTrue(
+                by_name[main_name][field],
+                "%s must survive on the primary" % field)
+            self.assertEqual(
+                by_name[linked_name][field], {},
+                "%s is read from the shared store and must be attributed "
+                "exactly once" % field)
+
+    def test_dedupe_is_one_sided_primary_keeps_everything(self):
+        """The dedupe must only ever empty the LINKED row. A symmetric
+        implementation would zero both and the signal would vanish from the
+        dashboard entirely -- worse than the duplicate it replaced."""
+        root, main_wt, _linked_wt = self._make_shared_pair()
+        _result, by_name = self._scan(root)
+        primary = by_name[os.path.basename(main_wt)]
+        # Pre-dedupe truth for the same checkout, read the way scan() reads it
+        # (its own defaults: since_days=365, no author filter). Comparing
+        # against this rather than against "is non-empty" keeps the assertion
+        # honest for a signal the fixture happens not to exercise -- `stashes`
+        # is legitimately 0 here, and an is-truthy check would have demanded
+        # the dedupe invent one.
+        expected = scan.collect_repo(main_wt, False, 365, [])
+
+        for field in scan.SHARED_STORE_SIGNALS:
+            self.assertEqual(
+                primary.get(field), expected.get(field),
+                "the primary worktree must keep %s exactly as collect_repo "
+                "read it; the dedupe folds signals ONTO it, never off it"
+                % field)
+
+    # -- (6) the two shared-store fields that must NOT be deduped ----------
+
+    def test_remotes_survive_on_the_linked_worktree(self):
+        """`remotes` is byte-identical across worktrees (one shared config)
+        and must still be left alone: projects.py _keys_for() makes the origin
+        URL a project identity key, while its root-commit key is namespaced by
+        repo NAME ("root:<sha>|reflex" vs "root:<sha>|reflex-bl"). Zero origin
+        on the linked worktree and it shares no key with its primary, falls
+        through to "solo:<machine>|<path>", and detaches into a phantom
+        project of its own."""
+        root, _main_wt, linked_wt = self._make_shared_pair()
+        _result, by_name = self._scan(root)
+        linked = by_name[os.path.basename(linked_wt)]
+
+        self.assertIn(
+            "origin", linked.get("remotes") or {},
+            "the linked worktree must keep its origin URL: it is what groups "
+            "it with its primary in the project view")
+        self.assertNotIn(
+            "remotes", scan.SHARED_STORE_SIGNALS,
+            "remotes must never be added to the dedupe -- see the audit note "
+            "beside SHARED_STORE_SIGNALS")
+
+    def test_lineage_survives_on_the_linked_worktree(self):
+        root, _main_wt, linked_wt = self._make_shared_pair()
+        _result, by_name = self._scan(root)
+
+        self.assertTrue(
+            by_name[os.path.basename(linked_wt)].get("lineage"),
+            "lineage is per-checkout (see the asymmetry test below) and must "
+            "not be folded away")
+        self.assertNotIn("lineage", scan.SHARED_STORE_SIGNALS)
+
+    def test_lineage_is_not_byte_identical_across_worktrees(self):
+        """The measurement that keeps lineage out of the dedupe, kept
+        executable so a later edit cannot quietly invalidate it.
+
+        collect_repo's lineage_for takes the top LINEAGE_BRANCHES tips by
+        committerdate and then ALWAYS appends this worktree's own checked-out
+        branch. Park a linked worktree on a branch too old to make that cut
+        and it carries history the primary does not -- so zeroing lineage
+        there would delete the only record of a branch checked out nowhere
+        else, which projects.py's leader/behind computation reads."""
+        root = os.path.join(self.tmp, "dated")
+        os.makedirs(root)
+        origin = os.path.join(root, "origin.git")
+        main_wt = os.path.join(root, "proj")
+        linked_wt = os.path.join(root, "proj-bl")
+        _git(["init", "-q", "--bare", "--initial-branch=main", origin], root)
+        _git(["clone", "-q", origin, main_wt], root)
+        _append(os.path.join(main_wt, "f.txt"), "one")
+        _git(["add", "f.txt"], main_wt)
+        _git(["commit", "-q", "-m", "c1"], main_wt, when="2020-01-01T00:00:00")
+        # `old-bl` shares that oldest commit; the topics below are all newer,
+        # so old-bl cannot be in the top LINEAGE_BRANCHES.
+        _git(["branch", "old-bl"], main_wt)
+        for i in range(scan.LINEAGE_BRANCHES + 2):
+            _git(["checkout", "-q", "-b", "topic%d" % i], main_wt)
+            _append(os.path.join(main_wt, "f.txt"), "t%d" % i)
+            _git(["commit", "-q", "-am", "t%d" % i], main_wt,
+                 when="2026-01-0%dT00:00:00" % (i + 1))
+        _git(["checkout", "-q", "main"], main_wt)
+        _git(["worktree", "add", "-q", linked_wt, "old-bl"], main_wt)
+
+        primary = scan.collect_repo(main_wt, False, 3650, None)
+        linked = scan.collect_repo(linked_wt, False, 3650, None)
+
+        self.assertEqual(primary["branch_tips"], linked["branch_tips"],
+                         "control: the ref namespace IS shared")
+        self.assertIn("old-bl", linked["lineage"])
+        self.assertNotIn(
+            "old-bl", primary["lineage"],
+            "the primary does not carry the linked worktree's own old branch "
+            "-- that asymmetry is why lineage stays out of the dedupe")
+        for b in set(primary["lineage"]) & set(linked["lineage"]):
+            self.assertEqual(
+                primary["lineage"][b], linked["lineage"][b],
+                "where both carry a branch the history is identical; the "
+                "difference is which branches each one selects")
 
 if __name__ == "__main__":
     unittest.main()

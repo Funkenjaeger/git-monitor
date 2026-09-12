@@ -148,7 +148,39 @@ def is_primary_worktree(path):
 # aren't here either -- they describe the branch currently checked out in
 # THIS worktree, which a linked worktree is free to have pointed somewhere
 # else entirely.
-SHARED_STORE_SIGNALS = ("unpushed", "unpushed_by_remote", "stashes")
+# Added 2026-09-11 (build order 2026-09-11#1), each decided by MEASURING the
+# two rows a `git worktree add` fixture produces rather than by reading the
+# git docs: `branch_tips` and `branch_dates` come from one `for-each-ref
+# refs/heads` over the shared ref namespace, and `commit_days` from `git log
+# --all`, so all three come back byte-identical from both checkouts. The
+# branch_tips duplicate is the one with a consumer: ol-control's collect.sh
+# builds its unpushed row from branch_tips and skips a repo whose tips are
+# empty, so a linked worktree kept producing a twin row after `unpushed`
+# itself was already deduped. commit_days is the one with the widest blast
+# radius: storage.get_commit_days() is `SUM(count) ... GROUP BY day` across
+# every repo, so every commit in a repo with a linked worktree was counted
+# twice in the dashboard heatmap.
+SHARED_STORE_SIGNALS = ("unpushed", "unpushed_by_remote", "stashes",
+                        "branch_tips", "branch_dates", "commit_days")
+# The two DICT_FIELDS deliberately NOT here, both measured on the same
+# fixture, both because a consumer reads them per-copy rather than per-store:
+#
+#   lineage -- NOT byte-identical. lineage_for (collect_repo) takes the top
+#     LINEAGE_BRANCHES tips by committerdate and then always appends THIS
+#     worktree's own checked-out branch, so a linked worktree sitting on an
+#     older branch carries lineage the primary does not (measured: primary
+#     {main, topic2..topic6}, linked {old-bl, topic2..topic6}; every shared
+#     key identical in value). Zeroing it would delete the only history for a
+#     branch checked out nowhere else, and projects.py's leader/behind
+#     computation reads exactly that.
+#
+#   remotes -- byte-identical, and still must not be zeroed. projects.py
+#     _keys_for() makes the ORIGIN URL a project identity key, while its
+#     root-commit key is namespaced by repo name ("root:<sha>|reflex" vs
+#     "root:<sha>|reflex-bl"). Strip origin from the linked worktree and it
+#     matches no key its primary has, falls through to "solo:<machine>|
+#     <path>", and detaches into a project of its own -- the dashboard would
+#     gain a phantom project instead of losing a duplicate row.
 #: Of those, the ones worth naming in a linked worktree's folded-in note.
 #: (unpushed_by_remote is a per-remote breakdown of `unpushed`, already
 #: implied by it, so it is zeroed but not separately narrated.)

@@ -99,7 +99,7 @@ DIGEST_FMT = "   ALERT  root warning %s:%s -- %s"
 
 # Where the real one lives. Overridable so this is runnable off dserver.
 COLLECT_SH = os.environ.get(
-    "COLLECT_SH", os.path.expanduser("~/ol-control/collect.sh"))
+    "COLLECT_SH", os.path.expanduser("~/estate/ol-control/collect.sh"))
 
 
 def real_digest_fmt(path=None):

@@ -464,6 +464,7 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
     ok, out = run_git(
         ["for-each-ref", "--sort=-committerdate",
          "--format=%(refname:short) %(objectname) %(committerdate:iso-strict)",
+         "--exclude=refs/heads/wip/desktop/*",
          "refs/heads"], cwd, gd)
     if ok:
         for ln in out.splitlines():
@@ -489,7 +490,7 @@ def collect_repo(path, bare, since_days, authors=None, precious_patterns=None):
     # (case-insensitive regex over "Name <email>"), so the heatmap reflects your
     # own activity, not upstream contributors on cloned/public repos.
     log_args = [
-        "log", "--all", "--no-merges",
+        "log", "--exclude=refs/heads/wip/desktop/*", "--all", "--no-merges",
         "--since=%d.days.ago" % int(since_days),
         "--date=short", "--format=%cd",
     ]

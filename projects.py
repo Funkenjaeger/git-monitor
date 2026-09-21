@@ -152,6 +152,85 @@ def _neg(iso):
     return tuple(-ord(c) for c in (iso or ""))
 
 
+#: Separator between a project's name and the location that disambiguates it.
+#: Spaces on both sides so the name still reads as the name on a dashboard row.
+_QUALIFIER = " @ "
+
+
+def _canonical_key(members):
+    """The (machine, path) that stands for one project when its name is not
+    enough. Labelling only -- it never affects which copies group.
+
+    Why this pair is unique BY CONSTRUCTION, not merely in practice:
+    `machine` is the collector target's `name`, which collector.validate_config
+    rejects a config for repeating ("duplicate target name"), and within one
+    target scan.scan() keeps a `seen` set so a path is collected at most once.
+    Downstream the two are the PRIMARY KEY of the repos table (storage.py).
+    So no two repo rows in the estate share this pair; a project is a disjoint
+    group of rows, so no two projects can produce the same key either.
+
+    `min` rather than "the first working copy" (which is what names the project
+    below): the label must not move because the scan returned rows in a
+    different order, or because a different copy was touched last.
+    """
+    return min((m.get("machine") or "", m.get("path") or "") for m in members)
+
+
+def _disambiguate_names(projects, groups):
+    """Make the rendered project names unique, renaming ONLY those that would
+    otherwise be identical.
+
+    The bug: the name falls back to a checkout's directory basename, so two
+    unrelated repos whose checkouts are both called `reflex` render one id. On
+    2026-09-19 the digest carried two `unpushed:reflex` lines meaning different
+    repos -- a reader cannot tell which one to go and look at, and anything
+    keyed on the id (a comment, a triage note) lands on whichever row it hits.
+
+    The scheme: a colliding project renders `<name> @ <machine>:<path>`, the
+    location coming from _canonical_key. Three properties were required:
+
+    * UNIQUE. The suffix is unique by construction (see _canonical_key), so two
+      qualified labels can never be equal. A qualified label could in principle
+      equal some third project's *plain* name -- only if a directory is
+      literally named `reflex @ desktop:C:/projects/reflex` -- so this loops to
+      a fixed point instead of assuming it away, and the loop terminates
+      because every round gives each duplicate a suffix no other project has.
+    * STABLE. The label is computed from the project's OWN rows and nothing
+      else, so a third `reflex` appearing later cannot rename the first two,
+      and the suffix cannot change shape as the estate grows (which is what
+      rules out "shortest suffix that tells them apart" and "append (2)").
+    * LEGIBLE. It still leads with the name a human is scanning for, and the
+      location it adds is already on the dashboard: render.py puts exactly
+      `machine:path` in the project row's title attribute (render.py:408), so
+      this discloses nothing that was not already rendered on the same element.
+
+    Deliberately NOT applied to a project whose name is already unique: an id
+    change is a consumer break, so nothing that did not collide is touched.
+    The flip side, and the one way this is not stable: a plain name is only
+    plain while it is unique, so when a second `reflex` first appears BOTH rows
+    get qualified. That is inherent in "rename only on collision" and is the
+    trade the consumer break rule asks for.
+
+    Collisions that remain possible, stated plainly: two names that differ only
+    in letter case (`Reflex` / `reflex`) are two distinct strings, so neither is
+    touched -- they are not the same id, they merely look alike on a row.
+    """
+    keys = [_canonical_key(g) for g in groups]
+    # Bounded: each round separates every current duplicate, so this settles
+    # long before the bound; the bound only guarantees it cannot spin.
+    for _ in range(len(projects) + 1):
+        counts = {}
+        for p in projects:
+            counts[p["name"]] = counts.get(p["name"], 0) + 1
+        dups = [i for i, p in enumerate(projects) if counts[p["name"]] > 1]
+        if not dups:
+            return
+        for i in dups:
+            machine, path = keys[i]
+            projects[i]["name"] = "%s%s%s:%s" % (
+                projects[i]["name"], _QUALIFIER, machine, path)
+
+
 def _relation(tip, leader_tip, leader_lin, own_lin):
     """Where a copy's tip sits relative to the leader. (state, count)."""
     if tip and tip == leader_tip:
@@ -207,7 +286,12 @@ def build_projects(repos, lineages):
     for i in range(len(repos)):
         comps.setdefault(find(i), []).append(repos[i])
 
-    projects = [_build_one(m, lineages) for m in comps.values()]
+    groups = list(comps.values())
+    projects = [_build_one(m, lineages) for m in groups]
+    # Two projects that render the same name are ONE id to every consumer --
+    # the dashboard row, the digest line, whatever is keyed on it -- so they are
+    # uniqued here, after grouping and before anything downstream sees them.
+    _disambiguate_names(projects, groups)
     projects.sort(key=lambda p: _neg(p["last_commit"]))
     return projects
 

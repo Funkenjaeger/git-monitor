@@ -52,7 +52,8 @@ CONTROL = [
     ("POST", "/refresh"),
 ]
 
-#: Everything that only reads. /api/summary is what the Homepage widget calls.
+#: Everything that only reads. /api/summary is what the Glance dashboard's
+#: Git Monitor widget calls (unauthenticated, from its container).
 READ = ["/", "/api/summary", "/api/data"]
 
 
@@ -120,9 +121,10 @@ class ReadPlaneIsOpen(GateBase):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
 
-    def test_api_summary_stays_open_because_homepage_reads_it(self):
-        # Called out separately: gating this breaks the Homepage widget, and
-        # that failure shows up days later on a different dashboard.
+    def test_api_summary_stays_open_because_the_dashboard_reads_it(self):
+        # Called out separately: gating this breaks the Glance dashboard's
+        # Git Monitor widget, and that failure shows up days later on a
+        # different dashboard.
         self.assertEqual(self.client.get("/api/summary").status_code, 200)
 
 

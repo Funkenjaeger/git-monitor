@@ -205,18 +205,19 @@ data in `<apps>/git-monitor/data`), but any Docker host works.
 3. Bring up the stack (`docker compose up -d --build`). It serves on host port **8083**.
 4. (Optional) Reverse-proxy it behind a hostname with TLS, and restrict access to
    your LAN/VPN.
-5. (Optional) A [Homepage](https://gethomepage.dev) tile via the `customapi` widget:
+5. (Optional) A [Glance](https://github.com/glanceapp/glance) widget via `custom-api`:
    ```yaml
-   - Git Monitor:
-       href: http://<host>:8083
-       icon: mdi-source-branch-check
-       widget:
-         type: customapi
-         url: http://<host>:8083/api/summary
-         mappings:
-           - { field: total_repos,      label: Repos }
-           - { field: dirty_repos,      label: Dirty }
-           - { field: unpushed_commits, label: Unpushed }
+   - type: custom-api
+     title: Git Monitor
+     url: http://<host>:8083/api/summary
+     cache: 1m
+     template: |
+       <div class="flex justify-between text-center">
+         <div><div class="size-h3">{{ .JSON.Int "total_repos" }}</div><div class="size-h6">REPOS</div></div>
+         <div><div class="size-h3">{{ .JSON.Int "dirty_repos" }}</div><div class="size-h6">DIRTY</div></div>
+         <div><div class="size-h3">{{ .JSON.Int "unpushed_commits" }}</div><div class="size-h6">UNPUSHED</div></div>
+         <div><div class="size-h3">{{ .JSON.Int "offline_machines" }}</div><div class="size-h6">OFFLINE</div></div>
+       </div>
    ```
 
 ## Local development

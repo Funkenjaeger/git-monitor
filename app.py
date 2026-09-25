@@ -1,7 +1,7 @@
 """git-monitor Flask app.
 
 Serves the dashboard (heatmap + top project list + machine status), the
-Homepage summary widget endpoint, and full JSON. A background scheduler runs
+summary endpoint the Glance dashboard's widget reads, and full JSON. A background scheduler runs
 the collector every N minutes; a Refresh button triggers an on-demand scan.
 
 Env:

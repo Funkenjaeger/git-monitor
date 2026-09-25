@@ -584,7 +584,7 @@ def get_summary(conn, config=None, now=None):
     machines = get_machines(conn, config, now=now)
     # Every registered signal, counted both ways, so a signal added later is in
     # /api/summary without a line being written here. The named keys below are
-    # the curated ones the dashboard's stat tiles and the Homepage widget read;
+    # the curated ones the dashboard's stat tiles and Glance's widget read;
     # they are derived from the same totals rather than recounted.
     by_signal = {
         s.key: {"repos": sum(1 for r in repos if s.fires(r)),

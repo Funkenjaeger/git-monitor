@@ -312,6 +312,97 @@ class ABareRepoStillStripsDotGit(LabelFixture):
                              "the `.git` strip was lost under disambiguation: %r" % i)
 
 
+class AForgejoOriginGroupsWithItsBare(LabelFixture):
+    """A repo migrating to the NAS's Forgejo must not split into two rows.
+
+    Before the move, a checkout's origin is the bare mirror directly
+    (/mnt/git/foo.git) and it groups with that bare via _tail2. After the
+    move the origin becomes `estate/foo` on forge.dudzik.app -- a different
+    string, but the SAME project: /mnt/git/foo.git still exists as the
+    follower copy Forgejo pushes to. Forgejo is not in HOSTS (it is a local
+    backup, not a hosting fork point), so without _forge_tail this origin
+    falls back to _tail2 and keys as `local:forge.dudzik.app/estate/foo` --
+    sharing nothing with the bare's `local:git/foo` -- and the dashboard
+    would show two rows for one project.
+    """
+
+    def _migrated_repo(self, origin):
+        bare_root = os.path.join(self.tmp, "mnt", "git")
+        checkout_root = os.path.join(self.tmp, "desktop", "projects")
+        os.makedirs(bare_root)
+        os.makedirs(checkout_root)
+        self.bare_repo(bare_root, "foo", "bare copy", "2026-01-01T10:00:00")
+        self.work_repo(checkout_root, "foo", "checkout", "2026-01-02T10:00:00",
+                       origin=origin)
+        self.scan_target("dserver-bares", bare_root, bare=True)
+        self.scan_target("desktop", checkout_root)
+
+    def test_ssh_forge_origin_groups_with_the_bare_it_leads(self):
+        self._migrated_repo("ssh://git@forge.dudzik.app:2222/estate/foo.git")
+        ids = self.ids()
+        self.assertEqual(len(ids), 1,
+                         "the migrated checkout and its bare rendered as two "
+                         "rows instead of one: %r" % (ids,))
+        project = storage.get_projects(self.conn)[0]
+        self.assertEqual(project["instances"], 2,
+                         "grouped into one row but didn't count both copies: %r"
+                         % (project,))
+
+    def test_https_forge_origin_groups_with_the_bare_it_leads(self):
+        self._migrated_repo("https://forge.dudzik.app/estate/foo.git")
+        self.assertEqual(len(self.ids()), 1)
+
+    def test_scp_like_forge_origin_groups_with_the_bare_it_leads(self):
+        self._migrated_repo("git@forge.dudzik.app:estate/foo.git")
+        self.assertEqual(len(self.ids()), 1)
+
+    def test_forge_host_is_not_added_to_hosting(self):
+        """Guard against the wrong fix: Forgejo must stay OUT of HOSTS (it is
+        on the NAS, a local backup, not a hosting remote) -- it must group
+        through the local path-tail, not through a `url:` hosting key."""
+        self.assertNotIn("forge.dudzik.app", projects.HOSTS)
+        self.assertFalse(projects._is_hosting(
+            "https://forge.dudzik.app/estate/foo.git"))
+
+
+class ForgeTailUnitChecks(unittest.TestCase):
+    """_forge_tail in isolation, on the three URL shapes named in the task
+    plus a non-forge URL, without going through the scan/storage fixture."""
+
+    def test_ssh_with_port(self):
+        self.assertEqual(
+            projects._forge_tail("ssh://git@forge.dudzik.app:2222/estate/foo.git"),
+            "git/foo")
+
+    def test_https_no_port(self):
+        self.assertEqual(
+            projects._forge_tail("https://forge.dudzik.app/estate/foo.git"),
+            "git/foo")
+
+    def test_scp_like(self):
+        self.assertEqual(
+            projects._forge_tail("git@forge.dudzik.app:estate/foo.git"),
+            "git/foo")
+
+    def test_case_and_missing_dot_git_are_tolerated(self):
+        self.assertEqual(
+            projects._forge_tail("HTTPS://FORGE.DUDZIK.APP/estate/Foo"),
+            "git/foo")
+
+    def test_non_forge_url_returns_none(self):
+        self.assertIsNone(
+            projects._forge_tail("https://github.com/org/foo.git"))
+
+    def test_forge_host_wrong_path_shape_returns_none(self):
+        # Not under estate/ -- some other Forgejo org/repo is not this project.
+        self.assertIsNone(
+            projects._forge_tail("git@forge.dudzik.app:other/foo.git"))
+
+    def test_empty_and_none_return_none(self):
+        self.assertIsNone(projects._forge_tail(""))
+        self.assertIsNone(projects._forge_tail(None))
+
+
 class TheLabelKeyIsUniqueByConstruction(unittest.TestCase):
     """The uniqueness argument itself, stated as a test rather than only as a
     comment: the qualifier is the project's smallest (machine, path), which is

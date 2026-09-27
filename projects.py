@@ -115,22 +115,53 @@ def _origin_hosting(r):
     return o if o and _is_hosting(o) else None
 
 
+#: The NAS's Forgejo, which leads the local `/mnt/git/<name>.git` bares as
+#: repos migrate to it. It is deliberately NOT in HOSTS: Forgejo lives on the
+#: same NAS as the bares it leads, so it is a local backup, not a hosting
+#: remote, and must not fuse every fork the way a real hosting origin would.
+_FORGE_HOST = "forge.dudzik.app"
+
+
+def _forge_tail(u):
+    """"git/<name>" when `u` is a Forgejo origin of the form
+    estate/<name>[.git] on _FORGE_HOST -- any scheme, any port, scp-like form
+    too -- else None.
+
+    Reuses _norm_url, which already collapses scheme/user/case/`.git` down to
+    a lowercased `host/path` (a port, if the URL carried one, survives as
+    `host:port`, so it's stripped here before comparing the host)."""
+    n = _norm_url(u)
+    if "/" not in n:
+        return None
+    host, path = n.split("/", 1)
+    host = host.split(":", 1)[0]
+    if host != _FORGE_HOST:
+        return None
+    parts = path.split("/")
+    if len(parts) != 2 or parts[0] != "estate" or not parts[1]:
+        return None
+    return "git/" + parts[1]
+
+
 def _keys_for(r):
     """Identity keys linking copies of one project; sharing *any* key groups two
     instances. The origin URL ties the same hosted repo together across differing
     directory names; a local (non-hosting) remote's path-tail ties a checkout to
     the bare mirror it pushes to; and root+name bridges plain clones. Only the
     *origin* contributes a hosting key -- an `upstream` remote must not fuse every
-    fork of one project together."""
+    fork of one project together. A Forgejo `estate/<name>` origin is the same
+    project as the `/mnt/git/<name>.git` bare it leads, so it keys the same way."""
     keys = set()
     origin = (r.get("remotes") or {}).get("origin")
     if origin:
         # Only origin defines identity. A hosting origin ties the same repo
         # together across dir names; a local origin's path-tail ties a checkout
-        # to the bare it clones from. Secondary remotes (a stale `NAS` copied in
+        # to the bare it clones from (a Forgejo estate/<name> origin included,
+        # via _forge_tail, since Forgejo leads that same bare rather than
+        # hosting a fork of it). Secondary remotes (a stale `NAS` copied in
         # from another project, an `upstream` fork) are deliberately ignored.
         keys.add(("url:" + _norm_url(origin)) if _is_hosting(origin)
-                 else ("local:" + _tail2(origin)))
+                 else ("local:" + (_forge_tail(origin) or _tail2(origin))))
     if r.get("is_bare"):
         keys.add("local:" + _tail2(r.get("path")))
     if r.get("root_key"):

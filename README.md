@@ -119,7 +119,7 @@ timezone: America/New_York        # file-level default; no guessing, see below
 
 targets:
   - name: desktop
-    ssh: user@192.168.1.20
+    ssh: user@192.0.2.10
     expected_online: "07:00-23:00"          # shorthand: hours, every day
     # expected_online:                      # or the full form
     #   hours: "07:00-23:00"                # end EXCLUSIVE; may cross midnight
@@ -269,7 +269,7 @@ anything a repo reports about itself.
 
   Copies are matched by **union-find over several identity keys** — two
   instances group if they share *any* of: a normalized `origin` URL (the same
-  hosted repo groups across differing directory names — cncpc's `~/linuxcnc`
+  hosted repo groups across differing directory names — the workstation's `~/linuxcnc`
   *is* `fj-lcnc-cfg`), a local origin's path-tail (a checkout to the bare it
   clones from), or a **root commit + name** (plain clones and their bare mirror).
   Only `origin` contributes a hosting key, so an `upstream` fork remote doesn't

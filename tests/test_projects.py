@@ -2,7 +2,7 @@
 
 projects.py names a project after the repo name in its *hosting* origin URL,
 which is stable and canonical. A project with no hosting origin -- a checkout
-that only ever pushes to the bare mirror on dserver, a repo with no remote at
+that only ever pushes to the bare mirror on the NAS, a repo with no remote at
 all -- has no such name, so the label falls back to a member row's `name`, and
 scan.collect_repo() sets that from the checkout's directory BASENAME (stripping
 `.git` only for a bare repo, scan.py:325-327).
@@ -142,15 +142,15 @@ class TwoReposMustNotShareAnId(LabelFixture):
 
     def _two_reflexes(self):
         desktop = os.path.join(self.tmp, "desktop", "projects")
-        dserver = os.path.join(self.tmp, "dserver", "projects")
+        nas = os.path.join(self.tmp, "nas", "projects")
         os.makedirs(desktop)
-        os.makedirs(dserver)
+        os.makedirs(nas)
         # Same basename, unrelated histories, no hosting origin on either --
         # so both fall back to the directory name and both want to be "reflex".
         self.work_repo(desktop, "reflex", "els", "2026-01-01T10:00:00")
-        self.work_repo(dserver, "reflex", "unrelated", "2026-02-02T11:00:00")
+        self.work_repo(nas, "reflex", "unrelated", "2026-02-02T11:00:00")
         self.scan_target("desktop", desktop)
-        self.scan_target("dserver", dserver)
+        self.scan_target("nas", nas)
 
     def test_same_basename_on_two_targets_renders_two_ids(self):
         self._two_reflexes()
@@ -179,8 +179,8 @@ class TwoReposMustNotShareAnId(LabelFixture):
         ids = self.ids()
         self.assertTrue(any("desktop" in i for i in ids),
                         "no id points at the desktop copy: %r" % (ids,))
-        self.assertTrue(any("dserver" in i for i in ids),
-                        "no id points at the dserver copy: %r" % (ids,))
+        self.assertTrue(any("nas" in i for i in ids),
+                        "no id points at the nas copy: %r" % (ids,))
 
     def test_a_third_reflex_does_not_rename_the_first_two(self):
         """Stability under growth. A scheme that numbers collisions, or that
@@ -235,7 +235,7 @@ class NothingThatDoesNotCollideIsRenamed(LabelFixture):
         dashboard into a rename."""
         self._mixed_root()
         untouched = self.ids()
-        other = os.path.join(self.tmp, "dserver", "projects")
+        other = os.path.join(self.tmp, "nas", "projects")
         os.makedirs(other)
         self.work_repo(other, "reflex", "one", "2026-04-01T10:00:00")
         self.work_repo(other, "reflex2", "two", "2026-04-02T10:00:00")
@@ -243,7 +243,7 @@ class NothingThatDoesNotCollideIsRenamed(LabelFixture):
         third = os.path.join(self.tmp, "elspi", "projects")
         os.makedirs(third)
         self.work_repo(third, "reflex", "another", "2026-04-03T10:00:00")
-        self.scan_target("dserver", other)
+        self.scan_target("nas", other)
         self.scan_target("elspi", third)
         for i in untouched:
             self.assertIn(i, self.ids(),
@@ -257,24 +257,24 @@ class TheIdIsStableAcrossScans(LabelFixture):
 
     def test_two_consecutive_scans_of_the_same_targets_agree(self):
         desktop = os.path.join(self.tmp, "desktop", "projects")
-        dserver = os.path.join(self.tmp, "dserver", "projects")
+        nas = os.path.join(self.tmp, "nas", "projects")
         os.makedirs(desktop)
-        os.makedirs(dserver)
+        os.makedirs(nas)
         # A collision is in the fixture on purpose: a qualifier built out of
         # anything volatile (an mtime, a scan timestamp, a row ordering) would
         # be invisible to a fixture that never collides.
         self.work_repo(desktop, "reflex", "els", "2026-01-01T10:00:00")
         self.work_repo(desktop, "digestif", "recipes", "2026-01-02T10:00:00")
-        self.work_repo(dserver, "reflex", "unrelated", "2026-02-02T11:00:00")
+        self.work_repo(nas, "reflex", "unrelated", "2026-02-02T11:00:00")
         self.scan_target("desktop", desktop)
-        self.scan_target("dserver", dserver)
+        self.scan_target("nas", nas)
         first = self.ids()
         self.assertEqual(len(first), 3, "fixture is wrong: %r" % (first,))
         self.assertEqual(len(set(first)), 3, "fixture never collides: %r" % (first,))
 
         # Nothing on disk changed. Scan both targets again.
         self.scan_target("desktop", desktop)
-        self.scan_target("dserver", dserver)
+        self.scan_target("nas", nas)
         second = self.ids()
         self.assertEqual(first, second,
                          "an id moved between two scans of unchanged targets:\n"
@@ -288,7 +288,7 @@ class ABareRepoStillStripsDotGit(LabelFixture):
         root = os.path.join(self.tmp, "mnt", "git")
         os.makedirs(root)
         self.bare_repo(root, "digestif", "recipes", "2026-01-01T10:00:00")
-        self.scan_target("dserver-bares", root, bare=True)
+        self.scan_target("nas-bares", root, bare=True)
         self.assertEqual(self.ids(), ["digestif"])
 
     def test_bare_mirror_keeps_the_stripped_name_when_it_collides(self):
@@ -300,7 +300,7 @@ class ABareRepoStillStripsDotGit(LabelFixture):
         os.makedirs(other)
         self.bare_repo(root, "digestif", "recipes", "2026-01-01T10:00:00")
         self.work_repo(other, "digestif", "something else", "2026-02-02T11:00:00")
-        self.scan_target("dserver-bares", root, bare=True)
+        self.scan_target("nas-bares", root, bare=True)
         self.scan_target("desktop", other)
         ids = self.ids()
         self.assertEqual(len(set(ids)), 2, "the bare and the checkout collide: %r" % (ids,))
@@ -334,7 +334,7 @@ class AForgejoOriginGroupsWithItsBare(LabelFixture):
         self.bare_repo(bare_root, "foo", "bare copy", "2026-01-01T10:00:00")
         self.work_repo(checkout_root, "foo", "checkout", "2026-01-02T10:00:00",
                        origin=origin)
-        self.scan_target("dserver-bares", bare_root, bare=True)
+        self.scan_target("nas-bares", bare_root, bare=True)
         self.scan_target("desktop", checkout_root)
 
     def test_ssh_forge_origin_groups_with_the_bare_it_leads(self):
@@ -410,7 +410,7 @@ class TheLabelKeyIsUniqueByConstruction(unittest.TestCase):
     order the rows came back in."""
 
     def test_the_key_does_not_depend_on_row_order(self):
-        a = {"machine": "dserver", "path": "/home/evand/projects/reflex"}
+        a = {"machine": "nas", "path": "/path/to/projects/reflex"}
         b = {"machine": "desktop", "path": "C:/projects/reflex"}
         self.assertEqual(projects._canonical_key([a, b]),
                          projects._canonical_key([b, a]))
@@ -418,7 +418,7 @@ class TheLabelKeyIsUniqueByConstruction(unittest.TestCase):
     def test_the_key_does_not_depend_on_which_copy_is_newest(self):
         a = {"machine": "desktop", "path": "C:/projects/reflex",
              "last_commit": "2026-01-01T00:00:00Z"}
-        b = {"machine": "dserver", "path": "/srv/reflex",
+        b = {"machine": "nas", "path": "/srv/reflex",
              "last_commit": "2026-09-01T00:00:00Z"}
         first = projects._canonical_key([a, b])
         a["last_commit"] = "2026-12-31T00:00:00Z"
@@ -429,7 +429,7 @@ class TheLabelKeyIsUniqueByConstruction(unittest.TestCase):
         unique per row, so two projects' keys differ."""
         one = [{"machine": "desktop", "path": "C:/projects/reflex"}]
         two = [{"machine": "desktop", "path": "C:/work/reflex"}]
-        three = [{"machine": "dserver", "path": "C:/projects/reflex"}]
+        three = [{"machine": "nas", "path": "C:/projects/reflex"}]
         keys = [projects._canonical_key(g) for g in (one, two, three)]
         self.assertEqual(len(set(keys)), 3)
 

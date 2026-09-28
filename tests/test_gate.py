@@ -34,7 +34,7 @@ try:
     import app as app_module  # noqa: E402
 except ImportError as exc:  # pragma: no cover
     # The rest of the suite is stdlib-only and runs anywhere, including on
-    # dserver's system python. This module needs Flask. Skip rather than error:
+    # a stock system python. This module needs Flask. Skip rather than error:
     # a red result on a machine that was never going to have the dependency
     # teaches people the suite is unreliable, and then a real failure gets the
     # same shrug.

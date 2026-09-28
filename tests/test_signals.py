@@ -207,7 +207,7 @@ class SignalsReachTheCollapsedRow(unittest.TestCase):
         them in sync, so nothing but `sig` can explain a chip."""
         clean = repo(machine="desktop", path="C:/projects/thing",
                      last_commit=NEWER)
-        other = repo(machine="dserver", path="/home/evand/projects/thing",
+        other = repo(machine="nas", path="/path/to/projects/thing",
                      last_commit=OLDER, **{sig.key: firing_value(sig)})
         return projects.build_projects([clean, other], {})
 
@@ -240,7 +240,7 @@ class SignalsReachTheCollapsedRow(unittest.TestCase):
     def test_a_genuinely_clean_project_still_says_clean(self):
         projs = projects.build_projects(
             [repo(machine="desktop", path="C:/projects/thing", last_commit=NEWER),
-             repo(machine="dserver", path="/srv/thing", last_commit=OLDER)], {})
+             repo(machine="nas", path="/srv/thing", last_commit=OLDER)], {})
         row = collapsed_row(render.render_projects(projs))
         self.assertIn('badge clean', row)
         self.assertNotIn('elsewhere', row)
@@ -250,7 +250,7 @@ class SignalsReachTheCollapsedRow(unittest.TestCase):
             with self.subTest(signal=sig.key):
                 one = repo(machine="desktop", path="C:/projects/thing",
                            last_commit=NEWER, **{sig.key: firing_value(sig)})
-                two = repo(machine="dserver", path="/srv/thing",
+                two = repo(machine="nas", path="/srv/thing",
                            last_commit=OLDER)
                 row = collapsed_row(
                     render.render_projects(projects.build_projects([one, two], {})))

@@ -153,7 +153,7 @@ targets:
   # A Windows machine with native OpenSSH Server. Note remote_python: python
   # (Windows has no `python3`), and Windows-style paths.
   - name: desktop
-    ssh: user@192.168.1.20
+    ssh: user@192.0.2.10
     remote_python: python
     roots:
       - { path: C:/projects, depth: 2 }
@@ -172,7 +172,7 @@ targets:
 
   # A Linux machine.
   - name: linux-pc
-    ssh: user@192.168.1.40
+    ssh: user@192.0.2.11
     remote_python: python3
     roots:
       - { path: /home/user, depth: 2 }

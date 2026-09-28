@@ -57,7 +57,7 @@ def scan_result(*names):
 
 
 def config_for(expected_online=None, **extra):
-    target = {"name": "desktop", "ssh": "evand@192.168.1.20",
+    target = {"name": "desktop", "ssh": "user@192.0.2.10",
               "roots": [{"path": "C:/projects", "depth": 2}]}
     if expected_online:
         target["expected_online"] = expected_online
@@ -81,11 +81,11 @@ class Base(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def scan(self, machine="desktop", *names):
-        storage.save_scan(self.conn, machine, "evand@192.168.1.20", "python",
+        storage.save_scan(self.conn, machine, "user@192.0.2.10", "python",
                           scan_result(*(names or ("git-monitor", "digest-agent"))))
 
     def fail_scan(self, machine="desktop", expected_offline=False):
-        storage.mark_unreachable(self.conn, machine, "evand@192.168.1.20",
+        storage.mark_unreachable(self.conn, machine, "user@192.0.2.10",
                                  "python", "ssh: connect timed out",
                                  expected_offline=expected_offline)
 

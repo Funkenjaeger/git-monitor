@@ -3,7 +3,7 @@
 A machine that is deliberately powered off for part of the day is not a fault,
 and reporting it as one costs the dashboard its meaning. The desktop target has
 carried `ALERT machines OFFLINE: 1` + `ALERT scan failed on desktop` every
-single night since 2026-08-10, when the nightly job moved to dserver and
+single night since 2026-08-10, when the nightly job moved to the collector host and
 nothing kept the desktop awake any more: "No route to host" at 01:07 on a
 machine whose owner is asleep. A light that is guaranteed red is not a signal,
 and the cost is not the light -- it is that every OTHER alert on that panel now
@@ -37,7 +37,7 @@ TWO THINGS THIS MODULE IS CAREFUL ABOUT
    that cries wolf, so every unknown resolves toward alerting.
 2. It never guesses a timezone. The collector runs in a python:3.12-slim
    container with no TZ set, so "now" there is UTC while the hours in this
-   config are the ones on the wall in front of Evan -- four or five hours out.
+   config are the ones on the maintainer's wall clock -- four or five hours out.
    A window silently evaluated in the wrong zone is the worst outcome available
    here: it suppresses real alerts during the day and fires false ones at
    night, and looks like a working feature the whole time. An absent timezone

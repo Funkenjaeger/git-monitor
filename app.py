@@ -93,7 +93,7 @@ def _config_or_empty():
 # is reachable two ways, and only one of them is authenticated.
 #
 #   through lanauth:  Pocket ID login, then Caddy stamps GATE_HEADER
-#   direct:           http://192.168.1.211:8083, which any LAN host can reach
+#   direct:           http://192.0.2.5:8083, which any LAN host can reach
 #
 # Source IP cannot tell them apart: docker SNATs published-port traffic to the
 # bridge gateway, so a gated request and a direct one arrive from the same
@@ -127,9 +127,9 @@ def gated(fn):
 
     Fails CLOSED when no secret is configured. An unset secret means the gate
     was never wired up, and the wrong response to that is not "let everyone in"
-    -- the same reasoning that put webedge on oauth2-proxy, which refuses to
-    start without an explicit allowlist, rather than tinyauth, whose policy
-    defaulted to allow.
+    -- the same reasoning that put the edge host on oauth2-proxy, which
+    refuses to start without an explicit allowlist, rather than tinyauth,
+    whose policy defaulted to allow.
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):

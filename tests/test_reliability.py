@@ -56,7 +56,7 @@ class ErrorShapingSurvivesTruncation(unittest.TestCase):
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
                "-o", "StrictHostKeyChecking=accept-new", "-i", "/data/id_ed25519",
                "-o", "UserKnownHostsFile=/data/known_hosts",
-               "evand@192.168.1.222", "python", "-", "A" * blob_len]
+               "user@192.0.2.12", "python", "-", "A" * blob_len]
         return subprocess.TimeoutExpired(cmd, timeout)
 
     def test_naive_slice_loses_the_message(self):
@@ -93,14 +93,14 @@ class ErrorShapingSurvivesTruncation(unittest.TestCase):
         stderr = ("Traceback (most recent call last):\n"
                    + "  File \"scan.py\", line 42, in <module>\n" * 30
                    + "ValueError: dubious ownership in repository at "
-                     "/home/evand/projects/thing\n")
+                     "/path/to/projects/thing\n")
         prefix = "ssh scan failed (rc=1): "
         shaped = prefix + collector._tail_truncate(stderr, 400 - len(prefix))
         self.assertLessEqual(len(shaped), 400)
         self.assertTrue(shaped.startswith(prefix))
         self.assertIn(
             "ValueError: dubious ownership in repository at "
-            "/home/evand/projects/thing", shaped)
+            "/path/to/projects/thing", shaped)
 
     def test_run_remote_rc_failure_message_keeps_tail(self):
         """End-to-end through run_remote itself, not just the helper."""
@@ -145,7 +145,7 @@ class RemoteScriptOption(unittest.TestCase):
         return run.call_args
 
     def test_default_still_pipes_the_script(self):
-        """Every existing target (cncpc, elspi, ...) relies on this path --
+        """Every existing target relies on this path --
         it must not change just because the option now exists."""
         with open(collector.SCAN_PY, "rb") as fh:
             scan_bytes = fh.read()

@@ -1,6 +1,6 @@
 """The desktop scanner-skew gap, 2026-09-09.
 
-e7f8a75 (the worktree-dedupe fix) landed on dserver and reached every `piped`
+e7f8a75 (the worktree-dedupe fix) landed on the collector and reached every `piped`
 target immediately -- scan.py's bytes go over stdin on every scan, so a patch
 to the collector's own copy is live everywhere on the next cycle. The desktop
 target is the one exception: `remote_script: installed` (see config.example.yaml

@@ -12,7 +12,7 @@ services:
     # Optional: map a hostname that only resolves inside the container to a
     # fixed IP, so you can reference it by name in config.yaml.
     # extra_hosts:
-    #   - "myhost.lan:192.168.1.30"
+    #   - "myhost.lan:192.0.2.7"
     volumes:
       # config.yaml, data.db, id_ed25519, known_hosts
       - /opt/apps/git-monitor/data:/data

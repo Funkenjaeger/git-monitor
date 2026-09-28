@@ -6,12 +6,12 @@ Every night at 01:07 the dashboard carried two alerts:
     ALERT  scan failed on desktop
 
 with `error: "RuntimeError: ssh scan failed (rc=255): ssh: connect to host
-192.168.1.243 port 22: No route to host"` on the desktop row. "No route to
+192.0.2.14 port 22: No route to host"` on the desktop row. "No route to
 host" on a permanent DHCP reservation is not a lease drift and not a broken
-key: the machine is simply switched off. Since the nightly job moved to dserver
-on 2026-08-10, nothing keeps it awake, so those two alerts were guaranteed red
-every night forever -- and an alert that is always on costs the whole panel its
-meaning, not just its own line.
+key: the machine is simply switched off. Since the nightly job moved to the
+collector host on 2026-08-10, nothing keeps it awake, so those two alerts were
+guaranteed red every night forever -- and an alert that is always on costs the
+whole panel its meaning, not just its own line.
 
 The debounce could not fix it. `OFFLINE_AFTER_FAILURES = 2` guards against a
 BLIP -- one slow night, a host mid-reboot -- and a machine that is off for nine
@@ -69,7 +69,7 @@ def _cfg(*targets, **kw):
 
 
 def _target(name="desktop", window="07:00-23:00", **kw):
-    t = {"name": name, "ssh": "evand@192.168.1.243",
+    t = {"name": name, "ssh": "user@192.0.2.14",
          "roots": [{"path": "C:/projects", "depth": 2}]}
     if window is not None:
         t["expected_online"] = window
@@ -636,12 +636,12 @@ class CollectOneClassifiesTheFailure(unittest.TestCase):
 
     def test_collect_all_carries_the_status_through(self):
         cfg = _cfg(_target("desktop", window=_window_excluding_now()),
-                   _target("cncpc", window=None))
+                   _target("workstation", window=None))
         with mock.patch("collector.scan_target", return_value=(False, "boom")):
             results = collector.collect_all(self.conn, cfg)
         self.assertEqual([(n, ok, st) for n, ok, _i, st in results],
                          [("desktop", True, "off_hours"),
-                          ("cncpc", False, "failed")])
+                          ("workstation", False, "failed")])
 
 
 class TheIncidentItself(unittest.TestCase):
@@ -666,7 +666,7 @@ class TheIncidentItself(unittest.TestCase):
         target = _target("desktop", window=window)
         cfg = _cfg(target)
         err = ("RuntimeError: ssh scan failed (rc=255): ssh: connect to host "
-               "192.168.1.243 port 22: No route to host")
+               "192.0.2.14 port 22: No route to host")
         storage.save_scan(self.conn, "desktop", "ssh", "python", {"repos": []})
         results = []
         with mock.patch("collector.scan_target", return_value=(False, err)):

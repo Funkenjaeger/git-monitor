@@ -3,7 +3,7 @@
 Four repo rows on this dashboard (desktop/reflex-ui, desktop/reflex-fw,
 elspi/reflex-ui, elspi/reflex-fw) can never clear their `unpushed` count: by
 standing decision (2026-08-17), the split reflex-ui/reflex-fw repos are pushed
-to dserver only, never to GitHub, for the duration of the monorepo
+to the NAS only, never to GitHub, for the duration of the monorepo
 transition -- but origin is still configured as
 github.com/Funkenjaeger/reflex-{ui,fw} on every copy, so `unpushed` measures
 against a remote that will never receive those commits. That is a fact about

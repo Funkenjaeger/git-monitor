@@ -198,7 +198,7 @@ def scan_py_version_signal(target, defaults, result):
                         `installed` target whose hash MATCHES.
         "mismatch"  -- an `installed` target is running a DIFFERENT copy of
                         scan.py than this collector has. This is the actual
-                        motivating bug: e7f8a75 landed on dserver and reached
+                        motivating bug: e7f8a75 landed on the collector and reached
                         every piped target immediately while the desktop --
                         `remote_script: installed`, fronted by the Windows
                         sshd ForceCommand wrapper that execs its own copy at

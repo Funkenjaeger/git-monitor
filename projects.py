@@ -101,7 +101,7 @@ def _repo_name_from_url(u):
 
 def _tail2(p):
     """Last two path components, lowercased, .git stripped -- a mount-agnostic
-    id for a local bare repo. dserver:/mnt/git/digestif.git, z:\\git\\digestif.git
+    id for a local bare repo. nas:/mnt/git/digestif.git, z:\\git\\digestif.git
     and /mnt/git/digestif.git all reduce to git/digestif, so a checkout's local
     remote lines up with the bare mirror it points at across machines."""
     parts = [x for x in (p or "").replace("\\", "/").split("/") if x]
@@ -447,8 +447,8 @@ def _build_one(members, lineages):
             # what's wrong instead of reporting the leader as "clean".
             lag=max(lags) if lags else None)
     # Prefer the repo name from a hosting origin -- it's stable and canonical,
-    # so a checkout that happens to sit in a differently-named directory (cncpc's
-    # ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.
+    # so a checkout that happens to sit in a differently-named directory (the
+    # workstation's ~/linuxcnc for fj-lcnc-cfg) doesn't mislabel the whole project.
     name = None
     for m in members:
         o = _origin_hosting(m)

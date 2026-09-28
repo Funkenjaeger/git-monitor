@@ -17,7 +17,7 @@ and by what:
     targets:
       - name: homelab
         precious_coverage:
-          - { path: /home/evand/projects, by: 'duplicati "misc" job' }
+          - { path: /home/user/projects, by: 'duplicati "misc" job' }
 
 Three outcomes, and the third is the one that keeps this honest:
 
@@ -61,7 +61,7 @@ def declared_for(config, machine):
     it declares nothing at all.
 
     Deliberately per-target with no global fallback: a shared default list of
-    paths is meaningless across hosts (`/home/evand/projects` is not a thing on
+    paths is meaningless across hosts (`/home/user/projects` is not a thing on
     the Windows desktop) and would mark files covered on a machine nobody had
     actually thought about -- a false green, which is the one outcome worse than
     a false red."""

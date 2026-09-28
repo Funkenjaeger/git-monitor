@@ -901,7 +901,7 @@ var CARD_HTML =
   '<button data-action="test">Test</button>'+
   '<button class="danger" data-action="remove-machine" title="remove machine">&times;</button></div>'+
   '<div class="grid field">'+
-  '<div><label>SSH (user@host or "local")</label><input class="f-ssh" placeholder="user@192.168.1.50"></div>'+
+  '<div><label>SSH (user@host or "local")</label><input class="f-ssh" placeholder="user@192.0.2.25"></div>'+
   '<div><label>Remote python (optional)</label><input class="f-rpy" placeholder="python3"></div>'+
   '<div><label>Timeout s (optional)</label><input class="f-timeout" type="number" placeholder="default"></div>'+
   '</div>'+

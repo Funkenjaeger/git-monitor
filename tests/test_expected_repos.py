@@ -97,7 +97,7 @@ def missing_alarms(warnings, machine="elspi"):
 # test_the_transcribed_digest_format_still_matches_collect_sh below.
 DIGEST_FMT = "   ALERT  root warning %s:%s -- %s"
 
-# Where the real one lives. Overridable so this is runnable off dserver.
+# Where the real one lives. Overridable so this is runnable off the collector host.
 COLLECT_SH = os.environ.get(
     "COLLECT_SH", os.path.expanduser("~/estate/ol-control/collect.sh"))
 
@@ -383,7 +383,7 @@ class TranscribedFormatStillMatchesReality(unittest.TestCase):
             self.skipTest(
                 "UNKNOWN: cannot read %s from here, so the transcribed "
                 "DIGEST_FMT was NOT verified against the original. This is a "
-                "wrong-vantage-point skip, not a pass -- re-run on dserver, or "
+                "wrong-vantage-point skip, not a pass -- re-run on the collector host, or "
                 "set COLLECT_SH." % COLLECT_SH)
         self.assertNotEqual(
             real, "",

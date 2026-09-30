@@ -300,8 +300,8 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
     archived that has MOVED PAST its pin must do the opposite of go quiet --
     that is a new commit landing on something everyone stopped watching."""
 
-    ORIGIN = "git@github.com:Funkenjaeger/reflex-ui.git"
-    CONFIG = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"}}
+    ORIGIN = "git@github.com:example-owner/reflex-ui.git"
+    CONFIG = {"archived": {"github.com/example-owner/reflex-ui": "1a2b3c4d"}}
 
     def _repo(self, head_sha, **over):
         return repo(remotes={"origin": self.ORIGIN}, head_sha=head_sha,
@@ -348,7 +348,7 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
     def test_declared_ONE_entry_per_project_covers_every_machine(self):
         # desktop and elspi normalize the same origin URL to the same key --
         # the whole point being one config line covers both machines' copies.
-        desktop = repo(remotes={"origin": "https://github.com/Funkenjaeger/reflex-ui"},
+        desktop = repo(remotes={"origin": "https://github.com/example-owner/reflex-ui"},
                        head_sha="1a2b3c4d", unpushed=6)
         elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="1a2b3c4d", unpushed=6)
         archived.annotate([desktop, elspi], self.CONFIG)
@@ -356,9 +356,9 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
         self.assertTrue(elspi["archived_pinned"])
 
     def test_per_target_pin_overrides_the_global_map(self):
-        cfg = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"},
+        cfg = {"archived": {"github.com/example-owner/reflex-ui": "1a2b3c4d"},
                "targets": [{"name": "elspi",
-                            "archived": {"github.com/Funkenjaeger/reflex-ui": "89b09bb"}}]}
+                            "archived": {"github.com/example-owner/reflex-ui": "89b09bb"}}]}
         r = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
                  unpushed=6, machine="elspi")
         archived.annotate([r], cfg)
@@ -372,9 +372,9 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
         them renders the loud archived_diverged chip, falsely."""
         cfg = {"targets": [
             {"name": "desktop",
-             "archived": {"github.com/Funkenjaeger/reflex-ui": "96bb910"}},
+             "archived": {"github.com/example-owner/reflex-ui": "96bb910"}},
             {"name": "elspi",
-             "archived": {"github.com/Funkenjaeger/reflex-ui": "89b09bb"}}]}
+             "archived": {"github.com/example-owner/reflex-ui": "89b09bb"}}]}
         desktop = repo(remotes={"origin": self.ORIGIN}, head_sha="96bb910dcfca",
                        unpushed=10, machine="desktop")
         elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
@@ -392,7 +392,7 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
         """A pin declared for desktop must not silence elspi's copy, or the
         loud case stops being reachable at all."""
         cfg = {"targets": [{"name": "desktop",
-                            "archived": {"github.com/Funkenjaeger/reflex-ui": "96bb910"}}]}
+                            "archived": {"github.com/example-owner/reflex-ui": "96bb910"}}]}
         elspi = repo(remotes={"origin": self.ORIGIN}, head_sha="89b09bbc834d",
                      unpushed=6, machine="elspi")
         archived.annotate([elspi], cfg)
@@ -400,9 +400,9 @@ class ArchivedSuppressesUnpushed(unittest.TestCase):
         self.assertEqual(signals.by_key("unpushed").count(elspi), 6)
 
     def test_global_map_still_covers_a_machine_with_no_target_entry(self):
-        cfg = {"archived": {"github.com/Funkenjaeger/reflex-ui": "1a2b3c4d"},
+        cfg = {"archived": {"github.com/example-owner/reflex-ui": "1a2b3c4d"},
                "targets": [{"name": "desktop",
-                            "archived": {"github.com/Funkenjaeger/reflex-fw": "64f033a"}}]}
+                            "archived": {"github.com/example-owner/reflex-fw": "64f033a"}}]}
         r = repo(remotes={"origin": self.ORIGIN}, head_sha="1a2b3c4d5e6f",
                  unpushed=6, machine="desktop")
         archived.annotate([r], cfg)

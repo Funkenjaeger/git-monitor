@@ -115,27 +115,39 @@ def _origin_hosting(r):
     return o if o and _is_hosting(o) else None
 
 
-#: The NAS's Forgejo, which leads the local `/mnt/git/<name>.git` bares as
-#: repos migrate to it. It is deliberately NOT in HOSTS: Forgejo lives on the
-#: same NAS as the bares it leads, so it is a local backup, not a hosting
-#: remote, and must not fuse every fork the way a real hosting origin would.
-_FORGE_HOST = "forge.dudzik.app"
+#: Hostname of a self-hosted forge (Forgejo/Gitea) that LEADS the local
+#: `<root>/<name>.git` bares as repos migrate onto it. It is deliberately NOT
+#: in HOSTS: such a forge normally runs on the same machine as the bares it
+#: leads, so it is a local backup rather than a hosting remote, and must not
+#: fuse every fork the way a real hosting origin would.
+#:
+#: UNSET (None) is the default and a working configuration -- it means no
+#: forge keying at all, so a forge-shaped origin keys like any other
+#: non-hosting remote, via _tail2. It is site-specific, so it is a SETTING,
+#: not a literal: app.py re-applies it from the runtime config on every config
+#: read (collector.forge_host), which is also what makes an edit to
+#: config.yaml take effect without a restart.
+FORGE_HOST = None
 
 
-def _forge_tail(u):
-    """"git/<name>" when `u` is a Forgejo origin of the form
-    estate/<name>[.git] on _FORGE_HOST -- any scheme, any port, scp-like form
-    too -- else None.
+def _forge_tail(u, forge_host):
+    """"git/<name>" when `u` is a forge origin of the form estate/<name>[.git]
+    on `forge_host` -- any scheme, any port, scp-like form too -- else None.
+
+    Always None when `forge_host` is falsy: with no forge configured there is
+    no such thing as a forge origin, and the caller falls back to _tail2.
 
     Reuses _norm_url, which already collapses scheme/user/case/`.git` down to
     a lowercased `host/path` (a port, if the URL carried one, survives as
     `host:port`, so it's stripped here before comparing the host)."""
+    if not forge_host:
+        return None
     n = _norm_url(u)
     if "/" not in n:
         return None
     host, path = n.split("/", 1)
     host = host.split(":", 1)[0]
-    if host != _FORGE_HOST:
+    if host != forge_host.strip().lower():
         return None
     parts = path.split("/")
     if len(parts) != 2 or parts[0] != "estate" or not parts[1]:
@@ -143,25 +155,29 @@ def _forge_tail(u):
     return "git/" + parts[1]
 
 
-def _keys_for(r):
+def _keys_for(r, forge_host=None):
     """Identity keys linking copies of one project; sharing *any* key groups two
     instances. The origin URL ties the same hosted repo together across differing
     directory names; a local (non-hosting) remote's path-tail ties a checkout to
     the bare mirror it pushes to; and root+name bridges plain clones. Only the
     *origin* contributes a hosting key -- an `upstream` remote must not fuse every
-    fork of one project together. A Forgejo `estate/<name>` origin is the same
-    project as the `/mnt/git/<name>.git` bare it leads, so it keys the same way."""
+    fork of one project together. When a forge host is configured, its
+    `estate/<name>` origin is the same project as the `<root>/<name>.git` bare
+    it leads, so it keys the same way; with none configured that collapses to
+    the ordinary path-tail key."""
     keys = set()
     origin = (r.get("remotes") or {}).get("origin")
     if origin:
         # Only origin defines identity. A hosting origin ties the same repo
         # together across dir names; a local origin's path-tail ties a checkout
-        # to the bare it clones from (a Forgejo estate/<name> origin included,
-        # via _forge_tail, since Forgejo leads that same bare rather than
-        # hosting a fork of it). Secondary remotes (a stale `NAS` copied in
-        # from another project, an `upstream` fork) are deliberately ignored.
+        # to the bare it clones from (a configured forge's estate/<name>
+        # origin included, via _forge_tail, since that forge leads the same
+        # bare rather than hosting a fork of it). Secondary remotes (a stale
+        # `NAS` copied in from another project, an `upstream` fork) are
+        # deliberately ignored.
         keys.add(("url:" + _norm_url(origin)) if _is_hosting(origin)
-                 else ("local:" + (_forge_tail(origin) or _tail2(origin))))
+                 else ("local:" + (_forge_tail(origin, forge_host)
+                                   or _tail2(origin))))
     if r.get("is_bare"):
         keys.add("local:" + _tail2(r.get("path")))
     if r.get("root_key"):
@@ -305,9 +321,13 @@ def build_projects(repos, lineages):
         if ra != rb:
             parent[ra] = rb
 
+    # Read the setting ONCE, here, so every row in one build is keyed against
+    # the same forge host even if the config is re-read mid-flight.
+    forge_host = FORGE_HOST
+
     seen = {}
     for i, r in enumerate(repos):
-        for k in _keys_for(r):
+        for k in _keys_for(r, forge_host):
             if k in seen:
                 union(i, seen[k])
             else:

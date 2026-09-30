@@ -19,6 +19,7 @@ import time
 from flask import Flask, abort, jsonify, redirect, request, url_for
 
 import collector
+import projects
 import storage
 from render import render_config_page, render_page
 
@@ -82,11 +83,19 @@ def scheduler_loop():
 def _config_or_empty():
     """Config for the read side. Backup coverage for precious files is declared
     there (see coverage.py), so a page render needs it -- but an unparseable
-    config must degrade to "coverage unknown", not to a blank dashboard."""
+    config must degrade to "coverage unknown", not to a blank dashboard.
+
+    Also re-applies the one setting that is read outside the request path --
+    projects.FORGE_HOST, which projects.build_projects picks up when it groups
+    instances -- so editing it in config.yaml takes effect on the next page
+    load, exactly like every other setting here. An unparseable config sets it
+    back to unset rather than leaving a stale value behind."""
     try:
-        return collector.load_config(CONFIG_PATH)
+        config = collector.load_config(CONFIG_PATH)
     except Exception:
-        return {}
+        config = {}
+    projects.FORGE_HOST = collector.forge_host(config)
+    return config
 
 
 # The control plane -- the config editor, the config API and the scan triggers --
@@ -139,8 +148,12 @@ def gated(fn):
         # compare_digest, not ==: a shared secret compared byte-by-byte leaks
         # its prefix through timing.
         if not hmac.compare_digest(request.headers.get(GATE_HEADER, ""), GATE_SECRET):
-            abort(403, "the control plane is reachable only through lanauth "
-                       "(https://gitmonitor.dudzik.app)")
+            # Name the front door when the deployment has told us what it is.
+            # With no instance_url configured the message stands on its own
+            # rather than pointing at a guess.
+            link = collector.instance_url(_config_or_empty())
+            abort(403, "the control plane is reachable only through lanauth"
+                       + (" (%s)" % link if link else ""))
         return fn(*args, **kwargs)
     return wrapper
 

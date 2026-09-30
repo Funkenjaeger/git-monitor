@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -43,6 +44,92 @@ def load_config(path):
             "pip install pyyaml"
         )
     return yaml.safe_load(text)
+
+
+# -- deployment settings ----------------------------------------------------
+#
+# Two optional, site-specific strings that used to be literals in the source.
+# Both default to UNSET and unset is a working configuration: this is a
+# personal dashboard, and it must run with nothing configured but a target
+# list.
+#
+#   forge_host    Hostname of a self-hosted forge (Forgejo/Gitea) whose
+#                 `estate/<name>` repos LEAD the local `<root>/<name>.git`
+#                 bares, so a checkout migrated to it still groups with the
+#                 bare it came from (projects._forge_tail). Unset means no
+#                 forge keying at all: such an origin keys like any other
+#                 non-hosting remote, which is what every deployment without
+#                 a forge wants.
+#   instance_url  Public URL of this dashboard. Used only in the 403 the
+#                 control plane returns, so the message can point at the front
+#                 door. Unset means the message carries no link.
+#
+# Each is read from config.yaml, with an environment variable as an override
+# for deployments that would rather keep it in the compose file.
+FORGE_HOST_KEY = "forge_host"
+FORGE_HOST_ENV = "GITMON_FORGE_HOST"
+INSTANCE_URL_KEY = "instance_url"
+INSTANCE_URL_ENV = "GITMON_INSTANCE_URL"
+
+#: A bare hostname: letters, digits, dots, hyphens. Deliberately no scheme, no
+#: port and no path -- projects._forge_tail compares against the host part of
+#: an already-normalized URL and strips whatever port that URL carried, so a
+#: port configured here could only ever fail to match.
+_HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+
+
+def _raw_setting(env_name, key, config):
+    """The configured value, environment first.
+
+    An environment variable that is set but blank counts as ABSENT rather than
+    as an override to empty, so an `FOO=` left in a compose file does not
+    silently mask a perfectly good config.yaml line.
+    """
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip():
+        return raw
+    if not isinstance(config, dict):
+        return None
+    return config.get(key)
+
+
+def forge_host(config=None):
+    """The configured forge hostname, lowercased, or None when it is unset.
+
+    A malformed value is IGNORED -- it returns None, exactly as if nothing had
+    been configured -- rather than raising. The read side already degrades
+    instead of failing (see app._config_or_empty), and the cost of ignoring
+    this one is small and self-announcing: a forge-hosted repo renders as its
+    own row next to the bare it leads instead of merging with it. Refusing to
+    start, or blanking the dashboard, over a typo in an optional grouping hint
+    would be the larger outage.
+    """
+    raw = _raw_setting(FORGE_HOST_ENV, FORGE_HOST_KEY, config)
+    if not isinstance(raw, str):
+        return None
+    host = raw.strip().lower()
+    if not host or len(host) > 253 or not _HOSTNAME_RE.match(host):
+        return None
+    return host
+
+
+def instance_url(config=None):
+    """The configured public URL of this dashboard, or None when unset.
+
+    Same ignore-don't-raise rule as forge_host. Must be http(s) and free of
+    whitespace and quote characters: it is interpolated into an error message,
+    and a value that cannot be a URL is more likely a mistake than an intent.
+    """
+    raw = _raw_setting(INSTANCE_URL_ENV, INSTANCE_URL_KEY, config)
+    if not isinstance(raw, str):
+        return None
+    url = raw.strip()
+    scheme, sep, rest = url.partition("://")
+    if scheme.lower() not in ("http", "https") or not sep or not rest:
+        return None
+    if any(c.isspace() for c in url) or any(c in url for c in "<>\"'"):
+        return None
+    return url
 
 
 def build_scan_config(target, defaults):

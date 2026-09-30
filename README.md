@@ -73,6 +73,40 @@ large/vendored trees. See [config.example.yaml](config.example.yaml).
 (Note: browser saves are written by the container as root, so if you later edit
 the file over SSH you may need `sudo`.)
 
+### Optional: your forge and your own URL
+
+Two site-specific strings. Both default to **unset**, and unset is a working
+configuration — nothing here is needed to run the dashboard.
+
+```yaml
+# Hostname of a self-hosted forge (Forgejo/Gitea) whose `estate/<name>` repos
+# LEAD your local `<root>/<name>.git` bare mirrors. Set it and a checkout that
+# has migrated to the forge still groups with the bare it came from, instead of
+# rendering as a second row for the same project. Hostname only -- no scheme,
+# no port, no path.
+forge_host: forge.example.com
+
+# Public URL of this dashboard. Used only in the 403 the control plane returns,
+# so the message can point at the front door. Unset renders no link.
+instance_url: https://gitmon.example.com
+```
+
+Either can be given in the environment instead — `GITMON_FORGE_HOST` and
+`GITMON_INSTANCE_URL` — which wins over `config.yaml`. A variable that is set
+but blank counts as absent, so an empty entry in a compose file does not mask
+the config.
+
+A value that is not a valid hostname (or, for `instance_url`, not an `http(s)`
+URL) is **ignored** — it reads exactly as unset — rather than refused. These
+are optional presentation and grouping hints, and blanking the dashboard over a
+typo in one would be the larger outage. The symptom announces itself: forge
+repos stop merging with their bare, or the 403 loses its link.
+
+`forge_host` is deliberately *not* treated as a hosting service the way
+`github.com` is. Such a forge usually runs on the same machine as the mirrors it
+leads, so it is a local backup, not a fork point — treating it as hosting would
+fuse every fork of a project into one row.
+
 ### Repos a machine is supposed to have
 
 `roots` says where to look. It cannot say what has to come back, and an absent

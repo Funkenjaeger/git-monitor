@@ -1,6 +1,6 @@
 # Decisions
 
-## 2026-09-30 order 2026-09-29#1: the two settings are `forge_host` and `instance_url`, read from config.yaml with `GITMON_*` env overrides
+## The two settings are `forge_host` and `instance_url`, read from config.yaml with `GITMON_*` env overrides
 
 Named after what they are, not after the thing that reads them, and kept in
 `config.yaml` beside every other operational knob so the existing hot-reload
@@ -11,14 +11,14 @@ a deployment that prefers compose env over a config file has the same door.
 An env var that is set but blank counts as absent, so a stray `FOO=` cannot
 silently mask a good config line.
 
-## 2026-09-30 order 2026-09-29#1: both settings are parsed in `collector.py`, the module that already loads the config
+## Both settings are parsed in `collector.py`, the module that already loads the config
 
 `collector.load_config` is the single place the runtime config is read, so
 `collector.forge_host(config)` and `collector.instance_url(config)` sit next to
 it and every caller gets the same parse and the same validation. No new module
 was added for two strings, and `projects.py` does not learn to read files.
 
-## 2026-09-30 order 2026-09-29#1: `projects._forge_tail` takes the host as an argument; `build_projects` reads it from the module-level `projects.FORGE_HOST`, which `app.py` re-applies on each config read
+## `projects._forge_tail` takes the host as an argument; `build_projects` reads it from the module-level `projects.FORGE_HOST`, which `app.py` re-applies on each config read
 
 `storage.get_projects` is outside this order's bound, so the value cannot be
 threaded config -> storage -> `build_projects` as a parameter. `_forge_tail`
@@ -30,7 +30,7 @@ resets it to unset when the config will not parse rather than leaving a stale
 value behind. Threading it through `storage.get_projects` would be tidier and
 is the obvious follow-up once that file is in scope.
 
-## 2026-09-30 order 2026-09-29#1: a malformed setting is IGNORED (reads as unset), never raised
+## A malformed setting is IGNORED (reads as unset), never raised
 
 `forge_host` must be a bare hostname -- no scheme, port or path, since
 `_forge_tail` compares against an already-normalized URL's host and strips any
@@ -43,7 +43,7 @@ link: refusing to start over a typo in one would be the larger outage, and the
 symptom announces itself (forge repos stop merging with their bare; the 403
 loses its link).
 
-## 2026-09-30 order 2026-09-29#1: unset means NO forge keying at all, and NO link in the control-plane 403
+## Unset means NO forge keying at all, and NO link in the control-plane 403
 
 With `forge_host` unset a forge-shaped origin keys like any other non-hosting
 remote, via `_tail2` -- which is the correct behaviour for the majority of
@@ -52,7 +52,7 @@ installations, which have no forge. With `instance_url` unset the 403 reads
 than pointing at a guessed address. Both are covered by tests that fail if the
 default ever starts keying or linking on its own.
 
-## 2026-09-30 order 2026-09-29#1: two occurrences of the private host remain, in files outside this order's bound
+## Two occurrences of the private host remain, in files outside this order's bound
 
 The order's private-identifier grep still matches `LICENSE:3` (the copyright
 line, which is deliberate) and `archived.py:8-40` (a docstring quoting real
